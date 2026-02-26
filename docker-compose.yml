@@ -1,0 +1,11 @@
+services:
+  python-worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    ports:
+      - '8000:8000'
+    volumes:
+      - ./worker:/app
+    environment:
+      - WORKER_API_KEY=sk_worker_6f8a9d2b4c1e3f5a7d9c0e2b4f6a8c0d2e4f6a8c0d2e4f6a8c0d2e4f6a8c0d2

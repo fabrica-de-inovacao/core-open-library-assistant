@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pymupdf
+markitdown[pdf]
+pytesseract
+pdf2image
+python-dotenv
+Pillow
+httpx
+beautifulsoup4
