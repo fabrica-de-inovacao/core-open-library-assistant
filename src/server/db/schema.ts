@@ -7,6 +7,7 @@ import {
   uuid,
   varchar,
   jsonb,
+  boolean,
 } from 'drizzle-orm/pg-core';
 import type { AdapterAccount } from 'next-auth/adapters';
 
@@ -91,6 +92,13 @@ export const articles = pgTable('articles', {
   status: varchar('status', { length: 50 }).notNull(), // 'pending', 'extracting', 'llm_processing', 'done', 'failed', 'abstract_only'
   markdownContent: text('markdown_content'),
   tldrContent: text('tldr_content'),
+  // --- Enriched Metadata ---
+  abstract: text('abstract'),
+  keywords: text('keywords'), // comma-separated list from SOL detail page or CrossRef
+  citationCount: integer('citation_count'),
+  publisher: text('publisher'),
+  isOpenAccess: boolean('is_open_access'),
+  metadataSource: varchar('metadata_source', { length: 50 }).default('scraper'), // 'scraper' | 'crossref' | 'manual'
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

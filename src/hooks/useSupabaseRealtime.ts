@@ -63,6 +63,12 @@ export function useSupabaseRealtime(queryId: string | null) {
                   status: (raw.status as string | null) ?? item.status,
                   markdownContent: (raw.markdown_content as string | null) ?? item.markdownContent,
                   tldrContent: (raw.tldr_content as string | null) ?? item.tldrContent,
+                  abstract: (raw.abstract as string | null) ?? item.abstract,
+                  keywords: (raw.keywords as string | null) ?? item.keywords,
+                  citationCount: (raw.citation_count as number | null) ?? item.citationCount,
+                  publisher: (raw.publisher as string | null) ?? item.publisher,
+                  isOpenAccess: (raw.is_open_access as boolean | null) ?? item.isOpenAccess,
+                  metadataSource: (raw.metadata_source as string | null) ?? item.metadataSource,
                   updatedAt: raw.updated_at ? new Date(raw.updated_at as string) : item.updatedAt,
                 };
               })

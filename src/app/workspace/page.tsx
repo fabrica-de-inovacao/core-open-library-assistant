@@ -10,7 +10,30 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
-import { Send, Loader2, Search, Database, Library } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Send,
+  Loader2,
+  Search,
+  Database,
+  Library,
+  MoreVertical,
+  Link as LinkIcon,
+  Copy,
+  Download,
+  Flame,
+  FileText,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { useSession, signIn } from 'next-auth/react';
@@ -715,17 +738,114 @@ const ExtractionsPanel = React.memo(
     hasZeroResults: boolean;
     isSearchRunning: boolean;
   }) => {
-    // Supabase realtime lives here — article updates only re-render this panel, NOT the chat
     const articles = useSupabaseRealtime(activeQueryId);
-    // DIAGNOSTIC
-    console.log(
-      `[ExtractionsPanel] RENDER | articles.length=${articles.length} activeQueryId=${activeQueryId}`
-    );
 
-    // Notify parent of article changes for review-trigger logic (no parent re-render)
+    // Mapeia quais linhas estão expandidas (para ler o abstract/tldr completo)
+    const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+    // Mapeia quais linhas estão selecionadas (checkbox)
+    const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+
+    // DIAGNOSTIC
     useEffect(() => {
       onArticlesChange(articles);
     }, [articles, onArticlesChange]);
+
+    const toggleRowExpansion = (id: string) => {
+      setExpandedRows((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    };
+
+    const toggleRowSelection = (id: string, checked: boolean) => {
+      setSelectedRows((prev) => {
+        const next = new Set(prev);
+        if (checked) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+    };
+
+    const toggleAllSelection = (checked: boolean) => {
+      if (checked) {
+        setSelectedRows(new Set(articles.map((a) => a.id)));
+      } else {
+        setSelectedRows(new Set());
+      }
+    };
+
+    const copyToClipboard = async (text: string, description: string) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        // Opcional: Adicionar um pequeno toast ou notificação aqui futuramente
+        console.log(`Copiado: ${description}`);
+      } catch (err) {
+        console.error('Falha ao copiar', err);
+      }
+    };
+
+    const exportSelected = (format: 'csv' | 'bibtex') => {
+      const selectedArticles = articles.filter((a) => selectedRows.has(a.id));
+      if (selectedArticles.length === 0) return;
+
+      if (format === 'csv') {
+        const headers = [
+          'Title',
+          'Authors',
+          'Year',
+          'DOI',
+          'Keywords',
+          'CitationCount',
+          'Abstract',
+        ];
+        const csvContent =
+          headers.join(',') +
+          '\n' +
+          selectedArticles
+            .map((a) =>
+              [
+                `"${(a.title || '').replace(/"/g, '""')}"`,
+                `"${(a.authors || '').replace(/"/g, '""')}"`,
+                a.publicationYear || '',
+                a.doi || '',
+                `"${(a.keywords || '').replace(/"/g, '""')}"`,
+                a.citationCount || '',
+                `"${(a.abstract || '').replace(/"/g, '""')}"`,
+              ].join(',')
+            )
+            .join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `export_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else if (format === 'bibtex') {
+        const bibtexContent = selectedArticles
+          .map((a) => {
+            const authorFormat = a.authors ? a.authors.split(', ').join(' and ') : 'Unknown';
+            return `@article{${a.doi ? a.doi.replace(/\//g, '_') : 'auth' + (a.publicationYear || '')},\n  title={${a.title}},\n  author={${authorFormat}},\n  year={${a.publicationYear || 'unknown'}},\n  url={${a.originalUrl}}${a.doi ? `,\n  doi={${a.doi}}` : ''}${a.publisher ? `,\n  publisher={${a.publisher}}` : ''}\n}`;
+          })
+          .join('\n\n');
+
+        const blob = new Blob([bibtexContent], { type: 'text/plain;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `references_${new Date().toISOString().split('T')[0]}.bib`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    };
+
+    const isAllSelected = articles.length > 0 && selectedRows.size === articles.length;
+    const isIndeterminate = selectedRows.size > 0 && selectedRows.size < articles.length;
 
     return (
       <div className="bg-muted/10 flex h-full flex-col">
@@ -744,6 +864,31 @@ const ExtractionsPanel = React.memo(
                 Processamento assíncrono e extração de metadados em tempo real.
               </p>
             </div>
+            {selectedRows.size > 0 && (
+              <div className="animate-in fade-in zoom-in flex items-center gap-2 duration-200">
+                <span className="text-muted-foreground text-sm font-medium">
+                  {selectedRows.size} selecionado(s)
+                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 gap-2 border-dashed">
+                      <Download className="h-3.5 w-3.5" />
+                      Exportar
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Formato de Exportação</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => exportSelected('csv')}>
+                      Tabela CSV
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => exportSelected('bibtex')}>
+                      Citações BibTeX
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
           </div>
 
           {activeQueryId ? (
@@ -781,49 +926,168 @@ const ExtractionsPanel = React.memo(
                 <table className="w-full border-collapse text-left text-sm">
                   <thead className="border-border bg-muted/50 text-muted-foreground sticky top-0 z-10 border-b font-mono text-xs backdrop-blur">
                     <tr>
-                      <th className="w-12 px-3 py-2.5 font-medium">#</th>
-                      <th className="px-3 py-2.5 font-medium">Título do Artigo</th>
-                      <th className="w-32 px-3 py-2.5 font-medium">Status</th>
+                      <th className="w-10 px-3 py-2.5 text-center font-medium">
+                        <Checkbox
+                          checked={isAllSelected || (isIndeterminate && 'indeterminate')}
+                          onCheckedChange={(checked) => toggleAllSelection(!!checked)}
+                          aria-label="Select all"
+                          className="translate-y-[2px]"
+                        />
+                      </th>
+                      <th className="w-10 px-2 py-2.5 text-center font-medium">#</th>
+                      <th className="px-3 py-2.5 font-medium">Metadados do Artigo</th>
+                      <th className="w-24 px-3 py-2.5 font-medium">Status</th>
+                      <th className="w-10 px-3 py-2.5 text-center font-medium"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-border divide-y">
                     {articles.map((article, idx) => {
                       const rowNumber = idx + 1;
+                      const isExpanded = expandedRows.has(article.id);
+                      const isSelected = selectedRows.has(article.id);
+
+                      const displayContent = article.tldrContent || article.abstract;
+                      const contentSource = article.tldrContent ? 'TL;DR IA' : 'ABSTRACT';
+
                       return (
                         <tr
                           key={article.id}
                           id={`article-row-${rowNumber}`}
-                          className={`group hover:bg-muted/30 transition-colors ${highlightedRow === rowNumber ? 'bg-sky-500/10' : ''}`}
+                          className={`group transition-colors ${isSelected ? 'bg-sky-500/5 dark:bg-sky-500/10' : 'hover:bg-muted/30'} ${highlightedRow === rowNumber ? 'bg-sky-500/10 ring-2 ring-sky-500 ring-inset' : ''}`}
                         >
+                          <td className="px-3 py-4 text-center align-top">
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={(checked) =>
+                                toggleRowSelection(article.id, !!checked)
+                              }
+                              className="translate-y-[2px]"
+                            />
+                          </td>
                           <td
-                            className={`px-3 py-3 align-top font-mono text-xs transition-colors ${highlightedRow === rowNumber ? 'font-bold text-sky-500' : 'text-muted-foreground'}`}
+                            className={`px-2 py-4 text-center align-top font-mono text-xs transition-colors ${highlightedRow === rowNumber ? 'font-bold text-sky-500' : 'text-muted-foreground'}`}
                           >
                             {rowNumber.toString().padStart(2, '0')}
                           </td>
-                          <td className="px-3 py-3 align-top">
-                            <a
-                              href={article.originalUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-foreground mb-1 line-clamp-2 block font-medium transition-colors hover:text-sky-500 hover:underline hover:decoration-sky-500/30 hover:underline-offset-4"
-                            >
-                              {article.title}
-                            </a>
-                            <div className="text-muted-foreground font-mono text-[11px]">
-                              {article.authors} • {article.publicationYear} • {article.sourceName}
-                            </div>
-                            {article.tldrContent && (
-                              <div className="border-border bg-muted/20 mt-2 rounded-md border p-3">
-                                <div className="mb-1 font-mono text-[10px] font-semibold tracking-wider text-sky-500 uppercase">
-                                  TL;DR IA
+                          <td className="max-w-xl px-3 py-4 align-top">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="min-w-0 flex-1">
+                                <a
+                                  href={article.originalUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-foreground mb-1.5 line-clamp-2 text-sm leading-tight font-semibold hover:text-sky-500 hover:underline hover:decoration-sky-500/30"
+                                  title={article.title}
+                                >
+                                  {article.title}
+                                </a>
+
+                                <div className="text-muted-foreground mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                                  <span
+                                    className="max-w-[200px] truncate font-medium"
+                                    title={article.authors || ''}
+                                  >
+                                    {article.authors?.split(',')[0]}{' '}
+                                    {article.authors?.includes(',') && 'et al.'}
+                                  </span>
+                                  <span>•</span>
+                                  <span className="font-mono">{article.publicationYear}</span>
+                                  <span>•</span>
+                                  <span
+                                    className="max-w-[150px] truncate"
+                                    title={article.sourceName || ''}
+                                  >
+                                    {article.sourceName}
+                                  </span>
+
+                                  {article.citationCount != null && article.citationCount > 0 && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-600 dark:bg-amber-500/10 dark:text-amber-500">
+                                        <Flame className="h-3 w-3" />
+                                        {article.citationCount}{' '}
+                                        {article.citationCount === 1 ? 'citação' : 'citações'}
+                                      </span>
+                                    </>
+                                  )}
+
+                                  {article.doi && (
+                                    <>
+                                      <span>•</span>
+                                      <a
+                                        href={`https://doi.org/${article.doi}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1 transition-colors hover:text-sky-500"
+                                      >
+                                        <LinkIcon className="h-3 w-3" />
+                                        <span className="font-mono hover:underline">DOI</span>
+                                      </a>
+                                    </>
+                                  )}
                                 </div>
-                                <div className="text-foreground/90 font-sans text-xs leading-relaxed">
-                                  {article.tldrContent}
-                                </div>
+
+                                {article.keywords && (
+                                  <div
+                                    className={`mb-3 flex flex-wrap gap-1 ${!isExpanded ? 'max-h-6 overflow-hidden' : ''}`}
+                                  >
+                                    {article.keywords.split(',').map((kw, i) => (
+                                      <span
+                                        key={i}
+                                        className="bg-muted text-muted-foreground inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap"
+                                      >
+                                        {kw.trim()}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {displayContent && (
+                                  <div className="border-border bg-muted/20 group/content relative rounded-md border p-3">
+                                    <div className="mb-1 flex items-center justify-between">
+                                      <div
+                                        className={`font-mono text-[10px] font-semibold tracking-wider uppercase ${contentSource === 'TL;DR IA' ? 'text-sky-500' : 'text-slate-500'}`}
+                                      >
+                                        {contentSource}
+                                      </div>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="absolute top-1.5 right-1.5 h-5 w-5 rounded-full opacity-0 transition-opacity group-hover/content:opacity-100"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          copyToClipboard(displayContent, contentSource);
+                                        }}
+                                        title="Copiar texto"
+                                      >
+                                        <Copy className="text-muted-foreground h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                    <div
+                                      className={`text-foreground/90 font-sans text-xs leading-relaxed ${!isExpanded ? 'line-clamp-2' : ''}`}
+                                    >
+                                      {displayContent}
+                                    </div>
+                                    <button
+                                      onClick={() => toggleRowExpansion(article.id)}
+                                      className="mt-1 flex items-center gap-0.5 text-[10px] font-medium text-sky-500 transition-colors hover:text-sky-600"
+                                    >
+                                      {isExpanded ? (
+                                        <>
+                                          <ChevronUp className="h-3 w-3" /> Mostrar menos
+                                        </>
+                                      ) : (
+                                        <>
+                                          <ChevronDown className="h-3 w-3" /> Ler completo
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                )}
                               </div>
-                            )}
+                            </div>
                           </td>
-                          <td className="px-3 py-3 align-top">
+                          <td className="px-3 py-4 align-top">
                             <span
                               className={`inline-flex items-center rounded border px-2 py-1 font-mono text-[10px] tracking-wider uppercase ${
                                 article.status === 'done'
@@ -845,6 +1109,96 @@ const ExtractionsPanel = React.memo(
                               )}
                               {article.status ? article.status.replace('_', ' ') : 'UNKNOWN'}
                             </span>
+                          </td>
+                          <td className="px-3 py-4 text-right align-top">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-muted-foreground hover:text-foreground h-8 w-8"
+                                >
+                                  <MoreVertical className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-48">
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    copyToClipboard(article.originalUrl, 'Link Original')
+                                  }
+                                >
+                                  <LinkIcon className="text-muted-foreground mr-2 h-4 w-4" />
+                                  <span>Copiar Link</span>
+                                </DropdownMenuItem>
+                                {article.doi && (
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      copyToClipboard(`https://doi.org/${article.doi}`, 'Link DOI')
+                                    }
+                                  >
+                                    <LinkIcon className="mr-2 h-4 w-4 text-sky-500" />
+                                    <span>Copiar DOI</span>
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => copyToClipboard(article.title || '', 'Título')}
+                                >
+                                  <Copy className="text-muted-foreground mr-2 h-4 w-4" />
+                                  <span>Copiar Título</span>
+                                </DropdownMenuItem>
+                                {displayContent && (
+                                  <DropdownMenuItem
+                                    onClick={() => copyToClipboard(displayContent, contentSource)}
+                                  >
+                                    <FileText className="text-muted-foreground mr-2 h-4 w-4" />
+                                    <span>Copiar {contentSource}</span>
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuLabel className="text-muted-foreground font-mono text-xs">
+                                  CITAÇÃO
+                                </DropdownMenuLabel>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    const year = article.publicationYear
+                                      ? ` (${article.publicationYear})`
+                                      : '';
+                                    copyToClipboard(
+                                      `${article.authors || 'Unknown'}.${year}. ${article.title}. ${article.sourceName || ''}.`,
+                                      'Citação (APA)'
+                                    );
+                                  }}
+                                >
+                                  <Copy className="mr-2 h-4 w-4" />
+                                  <span>Formato APA</span>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    let abntAuthors = 'Unknown';
+                                    if (article.authors) {
+                                      abntAuthors = article.authors
+                                        .split(', ')
+                                        .map((author) => {
+                                          const parts = author.split(' ');
+                                          if (parts.length > 1) {
+                                            return `${parts.pop()?.toUpperCase()}, ${parts.join(' ')}`;
+                                          }
+                                          return author.toUpperCase();
+                                        })
+                                        .join('; ');
+                                    }
+                                    copyToClipboard(
+                                      `${abntAuthors}. ${article.title}. ${article.sourceName || ''}, ${article.publicationYear || ''}.`,
+                                      'Citação (ABNT)'
+                                    );
+                                  }}
+                                >
+                                  <Copy className="mr-2 h-4 w-4" />
+                                  <span>Formato ABNT</span>
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </td>
                         </tr>
                       );
