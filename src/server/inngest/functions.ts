@@ -235,8 +235,12 @@ export const processArticlesBatch = inngest.createFunction(
         try {
           const { text } = await generateText({
             model: getLanguageModel(),
-            system: `Você é um assistente acadêmico. Leia o texto fornecido (em formato Markdown) e elabore uma síntese extremamente concisa, focando no Problema resolvido, Metodologia e Conclusão. O seu resumo deve ter no MÁXIMO 300 caracteres e deve OBRIGATORIAMENTE ser redigido em Português do Brasil, independentemente do idioma original do texto. Se o texto não contiver informações suficientes, faça o melhor resumo possível com o conteúdo disponibilizado. Não inclua saudações.`,
-            prompt: `${contextPrefix ? contextPrefix + '\n\n' : ''}Resuma o seguinte texto científico:\n\n${markdownContent.substring(0, 30000)}`,
+            system: `Você é um assistente acadêmico especializado em sínteses científicas. Leia o texto fornecido e crie uma síntese estruturada EXATAMENTE no seguinte formato de 3 linhas:
+🔍 Problema: [qual problema ou lacuna o artigo endereça, em 1 frase]
+🛠 Método: [abordagem, técnica ou metodologia principal utilizada, em 1 frase]
+✅ Resultado: [principal conclusão ou contribuição do trabalho, em 1 frase]
+REGRAS: Máximo 600 caracteres no total. Obrigatoriamente em Português do Brasil. Sem saudações. Sem texto fora do template acima. Se o conteúdo for insuficiente, use o abstract disponível.`,
+            prompt: `${contextPrefix ? contextPrefix + '\n\n' : ''}Gere a síntese estruturada do seguinte texto científico:\n\n${markdownContent.substring(0, 30000)}`,
           });
           console.log(
             `[Inngest] ✅ TL;DR gerado para article=${article.id} | ${text.length} chars`

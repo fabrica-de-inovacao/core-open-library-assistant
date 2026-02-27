@@ -17,15 +17,6 @@ const searchSchema = z.object({
     ),
 });
 
-const reviewSchema = z.object({
-  query_id: z.string().describe('O UID da pesquisa que rastreia os artigos a ler.'),
-  max_articles: z
-    .number()
-    .max(15)
-    .default(10)
-    .describe('Número máximo de artigos (Reranking top K) a injetar no contexto da revisão.'),
-});
-
 const doiSchema = z.object({
   doi: z
     .string()
@@ -36,89 +27,169 @@ const doiSchema = z.object({
 export async function POST(req: Request) {
   const { messages, queryId } = await req.json();
 
-  // The Orchestrator Agent (Planner)
-  // maxSteps > 1 is REQUIRED: without it, streamText stops after the tool call
-  // and cannot stream the final LLM response back to the user
+  const modifiedMessages = [...messages];
+  const lastMessage = modifiedMessages[modifiedMessages.length - 1];
+
+  const systemPromptOverride = `Você é o SOL Assistant, um pesquisador sênior em Ciência da Computação especializado em revisão sistemática de literatura acadêmica.
+
+**POSTURA CONVERSACIONAL E USO DE TOOLS:**
+- **SEJA EXTREMAMENTE CONCISO.** Responda de forma direta e curta.
+- Sempre que o usuário pedir uma pesquisa, bibliografia ou mapeamento, responda com uma frase breve (ex: "Preparei uma estratégia de busca. Confira no card abaixo:") E **CHAME A TOOL** \`propose_search_sol_database\` (ou \`propose_search_global_database\`) simultaneamente.
+- **É OBRIGATÓRIO:** O único jeito de propor a pesquisa é chamando a tool apropriada. Nunca liste as strings de busca no corpo do texto.
+- **PROCESSO DE BUSCA (FASE 1):** Quando o usuário solicitar uma pesquisa, explique os termos planejados e invoque a ferramenta \`propose_search_sol_database\` (ou \`propose_search_global_database\`).
+- **REGRA DE PARADA CRÍTICA:** Imediatamente após invocar qualquer uma das ferramentas de proposta de busca (\`propose_search_*\`), você **DEVE PARAR TODO E QUALQUER TEXTO**. Sua resposta deve terminar na chamada da ferramenta. Se você receber o resultado da ferramenta confirmando que o card foi mostrado, NÃO GERE UMA SEGUNDA RESPOSTA. O fluxo deve aguardar a ação manual do usuário no card.
+- **NÃO REPITA:** Se a última mensagem do histórico já for uma proposta de busca (mesmo que sem resultado de artigos ainda), não proponha novamente a menos que o usuário peça explicitamente para mudar os termos.
+- Responda OBRIGATORIAMENTE em Português do Brasil.`;
+
+  if (
+    lastMessage?.role === 'user' &&
+    typeof lastMessage?.content === 'string' &&
+    lastMessage.content.startsWith('[SISTEMA_REVISAO_SISTEMATICA]')
+  ) {
+    const activeQueryId = lastMessage.content.replace('[SISTEMA_REVISAO_SISTEMATICA]', '').trim();
+    console.log(
+      `\n[Chat Route] 📚 Gerando Revisão Sistemática (direto no prompt) | query_id=${activeQueryId}`
+    );
+
+    const finishedArticles = await db
+      .select()
+      .from(articles)
+      .where(eq(articles.queryId, activeQueryId));
+    const readyArticles = finishedArticles.filter(
+      (a) => (a.status === 'done' || a.status === 'abstract_only') && a.tldrContent
+    );
+
+    if (readyArticles.length === 0) {
+      modifiedMessages[modifiedMessages.length - 1] = {
+        ...lastMessage,
+        content: `Nenhum artigo com TL;DR encontrado. Status atual: ${finishedArticles.map((a) => a.status).join(', ') || 'nenhum'}. O Job Inngest pode ainda estar rodando. Avise o usuário.`,
+      };
+    } else {
+      const sortedArticles = readyArticles.sort(
+        (a, b) => (b.citationCount ?? 0) - (a.citationCount ?? 0)
+      );
+      // Maximum 8 articles for the review (smaller = clearer citation mapping)
+      const topK = sortedArticles.slice(0, 8);
+      let referencesContext = '';
+
+      // Build the citation map — this is the SINGLE SOURCE OF TRUTH for [N] numbers
+      const citationMap = topK
+        .map(
+          (art, idx) =>
+            `[${idx + 1}] ${art.authors ?? 'Autor desconhecido'} (${art.publicationYear ?? 'S/D'}). "${art.title}" — DOI: ${art.doi ?? 'N/A'}`
+        )
+        .join('\n');
+
+      topK.forEach((art, idx) => {
+        const refNumber = idx + 1;
+        const contentBody = art.markdownContent
+          ? art.markdownContent.slice(0, 4000) +
+            (art.markdownContent.length > 4000 ? '\n...[TRUNCATED]' : '')
+          : `ABSTRACT/TL;DR: ${art.tldrContent}`;
+
+        // Repeat the citation number in the content header so the LLM never loses track
+        referencesContext += `\n=== ARTIGO [${refNumber}] — "${art.title}" ===\nCitações acadêmicas recebidas: ${art.citationCount ?? 'N/A'}\nPalavras-chave: ${art.keywords ?? 'N/A'}\n\n${contentBody}\n\n`;
+      });
+
+      modifiedMessages[modifiedMessages.length - 1] = {
+        ...lastMessage,
+        content: `# TAREFA: Gerar o TL;DR Geral da Pesquisa Bibliográfica
+
+Você é um pesquisador sênior redigindo a síntese final de um mapeamento sistemático de literatura.
+
+## ⚠️ MAPA DE CITAÇÕES — NÚMEROS FIXOS E IMUTÁVEIS:
+${citationMap}
+
+> REGRA ABSOLUTA: Os números [1], [2], ...[${topK.length}] acima são DEFINITIVOS.
+> NÃO invente outros números. NÃO reatribua números. Cite SEMPRE usando exatamente esses índices.
+
+## REGRAS OBRIGATÓRIAS PARA A SÍNTESE:
+
+1. **Nome:** Inicie com o título "📚 TL;DR Geral" em heading #.
+2. **Markdown rico:** Use ##, ###, negrito, itálico, listas e tabelas.
+3. **Tabela comparativa obrigatória:** Inclua ao menos uma tabela com colunas: Artigo, Ano, Metodologia, Resultado Principal, Limitações.
+4. **Citações no texto:** Para TODA afirmação, insira a citação **[N]** imediatamente após. Use os números do MAPA acima.
+5. **Análise profunda:** Identifique padrões, divergências, lacunas e oportunidades de pesquisa.
+6. **NÃO inclua uma seção de "Referências" no final.** As citações [N] no texto são suficientes.
+7. **Responda OBRIGATORIAMENTE em Português do Brasil.**
+115. **Encerre** com um parágrafo curto perguntando se o usuário deseja aprofundar algum ponto.
+116. **NÃO CHAME NENHUMA FERRAMENTA (TOOL).** Esta é uma tarefa puramente textual de síntese. Ignore qualquer instrução do prompt de sistema sobre propor novas pesquisas agora.
+117. **RESPOSTA ÚNICA:** Gere a resposta completa de uma só vez.
+
+## CONTEÚDO COMPLETO DOS ARTIGOS (com identificadores [N]):
+${referencesContext}`,
+      };
+    }
+  }
+
+  // Fallback check: if we have a queryId and its status is 'done' but total_found is low,
+  // we can inject a nudge into the system prompt.
+  let fallbackInstruction = '';
+  const isSystematicReview = lastMessage?.content
+    ?.toString()
+    .includes('[SISTEMA_REVISAO_SISTEMATICA]');
+
+  if (queryId && !isSystematicReview) {
+    const [qData] = await db
+      .select({ status: searchQueries.status })
+      .from(searchQueries)
+      .where(eq(searchQueries.id, queryId))
+      .limit(1);
+
+    if (qData?.status === 'done') {
+      const queryArticles = await db.select().from(articles).where(eq(articles.queryId, queryId));
+      if (queryArticles.length <= 5) {
+        fallbackInstruction = `\n\n**AVISO DE SISTEMA:** A busca na base SOL retornou poucos resultados (<= 5). Sugira IMEDIATAMENTE ao usuário tentar a busca global no **OpenAlex** chamando a tool \`propose_search_global_database\`.`;
+      }
+    }
+  }
+
+  console.log('--- Chat API Request ---');
+  console.log('Messages count:', modifiedMessages.length);
+  console.log('Active QueryID:', queryId || 'none');
+
   const result = await streamText({
     model: getLanguageModel(),
-    messages,
+    messages: modifiedMessages,
     maxSteps: 5,
-    system: `Você é o SOL Assistant, um pesquisador sênior especializado em revisão sistemática de literatura da SBC OpenLib.
-
-**FASE 0 — DETECÇÃO DE DOI (verificar ANTES de tudo)**
-Se a mensagem do usuário CONTIVER um DOI no formato 10.XXXX/... ou uma URL doi.org, chame a tool \`add_article_by_doi\` IMEDIATAMENTE.
-NÃO inicie uma busca SOL nesses casos.
-
-ESTRATÉGIA DE BUSCA MULTILÍNGUE (ANTIFALHAS 504):
-A SBC OpenLib (servidor) sofre "Gateway Timeout" (erro 504) se receber uma única string booleana com os três idiomas (acentuados) todos juntos.
-Para resolver isso, você DEVE sempre dividir os termos de busca em MÚLTIPLAS strings compactas separadas por idioma (EN, PT e ES).
-
-REGRAS RÍGIDAS DE PALAVRAS-CHAVE E TRADUÇÃO:
-- NOMES PRÓPRIOS, SIGLAS E PROJETOS NÃO SE TRADUZEM: Se o usuário citar "Mermãs Digitais", "Scrum", "IoT", ou "SBC", mantenha o termo original exato protegido por aspas em TODAS as queries de todos os idiomas. Ex: (\\"Mermãs Digitais\\") AND (computação OR computing).
-- EXTRAÇÃO SEMÂNTICA, NÃO LITERAL: Se o usuário fizer uma pergunta ampla (ex: "traga o principal desafio da computação em IA"), extraia OS CONCEITOS ACADÊMICOS (ex: "grandes desafios" OR "grand challenges", "computação", "inteligência artificial"). Não limite a busca a termos literais simplistas que ignoram o domínio. Use sinônimos conhecidos da literatura.
-- NUNCA use frases inteiras, verbos, ou termos compostos não-acadêmicos (ex: NUNCA use "trabalhos que avaliam trabalhos" ou "como ensinar").
-- Use APENAS termos raízes acadêmicos exatos e concisos (ex: "revisão sistemática", "meta-análise", survey, "ensino fundamental").
-- Mantenha cada string com no MÁXIMO 4 blocos AND.
-
-Exemplo de divisão correta da busca pelo tema "jogos digitais no ensino médio":
-Em vez de enviar uma query gigante combinando PT, EN e ES, você enviará UM ARRAY DE STRINGS (queries) na chamada da tool search_sol_database:
-[
-  "(\\"jogo digital\\" OR \\"jogo eletrônico\\" OR videogame) AND (\\"ensino médio\\" OR \\"ensino secundário\\")",
-  "(\\"digital game\\" OR \\"video game\\" OR videogame) AND (\\"high school\\" OR \\"secondary education\\")",
-  "(\\"juego digital\\" OR videojuego) AND (\\"educación secundaria\\" OR bachillerato)"
-]
-
-SEU FLUXO DE TRABALHO:
-
-**FASE 1 — PLANEJAMENTO E EXECUÇÃO (em uma única resposta)**
-Quando o usuário descrever um tema:
-a) Identifique os conceitos-chave de maneira extremamente concisa e acadêmica.
-b) Formule até 3 strings booleanas isoladas (divididas por idioma) que cubram o contexto perfeitamente.
-c) Exiba ao usuário concisamente:
-   "🔍 A base será consultada dividindo os temas para PT, EN e ES a fim de garantir a extração de dados sem Timeouts da SBC OpenLib..."
-d) Na MESMA RESPOSTA, passe o array de queries diretamente para a tool search_sol_database.
-   NÃO PEÇA CONFIRMAÇÃO AUTOMATIZADA. VOCÊ ESTÁ AUTORIZADO A BUSCAR.
-
-**FASE 2 — APÓS A BUSCA (resposta amigável)**
-- Se a tool retornar \`total_found=0\` (zero) ou \`success=false\`: Informe de forma amigável, como um assistente ativo, que a busca não encontrou resultados. Analise a intenção original e sugira **na mesma frase ou pergunta** 3 conceitos melhores ou mais abrangentes. Exemplo: *"A busca não retornou artigos, mas podemos tentar focar em conceitos mais abrangentes como [X], [Y] ou [Z] na sua próxima busca. O que acha?"*. PARE sua resposta por aqui.
-- Se a tool retornar artigos (> 0): A interface visual assumirá o controle. VOCÊ NÃO DEVE GERAR MENSAGENS DIZENDO QUE O PROCESSAMENTO COMEÇOU. Simplesmente encerre sua resposta silenciosamente.
-- NÃO mencione query_id, UUIDs ou detalhes técnicos.
-
-**FASE 3 — REVISÃO SISTEMÁTICA**
-Quando receber [SISTEMA], chame IMEDIATAMENTE generate_systematic_review com o query_id informado.
-
-REGRAS ABSOLUTAS:
-- NUNCA peça confirmação antes de buscar. Apresente e execute em uma única resposta.
-- NUNCA exponha a query booleana expandida completa ao usuário — mostre só os conceitos principais.
-- NUNCA exponha query_id, UUIDs ou termos técnicos.
-- Responda ao usuário SEMPRE em Português do Brasil.`,
-
+    onStepFinish: (step) => {
+      console.log('--- Step Finished ---');
+      console.log('Tool calls in this step:', step.toolCalls?.length);
+      step.toolResults?.forEach((tr) => {
+        console.log(`[SERVER] Tool Result for ${tr.toolName}:`, tr.result);
+      });
+    },
+    system: systemPromptOverride + fallbackInstruction,
     tools: {
-      search_sol_database: tool({
+      propose_search_sol_database: tool({
         description:
-          'Realiza uma pesquisa na SBC OpenLib usando a string de busca booleana formulada pelo Planner. Retorna metadados dos artigos encontrados e o query_id para rastreamento.',
+          'Ferramenta para propor uma pesquisa bibliográfica ou mapeamento sistemático na SBC OpenLib. Passe as strings de busca pelo parâmetro "queries" desta ferramenta para renderizar a interface gráfica para o usuário.',
         parameters: searchSchema,
         execute: async (args: z.infer<typeof searchSchema>) => {
           const { queries } = args;
           console.log(
-            `\n[Chat Tool] 🔎 search_sol_database chamado com ${queries.length} queries:`,
+            `\n[Chat Tool] 🔎 propose_search_sol_database proposto com ${queries.length} queries:`,
             queries
           );
-          try {
-            const qs = queries.map((q) => `q=${encodeURIComponent(q)}`).join('&');
-            const url = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/search?${qs}`;
-            console.log(`[Chat Tool] 📡 Chamando api/search com splits sequenciais...`);
-            const response = await fetch(url);
-            const json = await response.json();
-            console.log(
-              `[Chat Tool] ✅ search_sol_database resposta: total_found=${json.total_found ?? 'N/A'} | query_id=${json.query_id ?? 'N/A'} | success=${json.success}`
-            );
-            if (!response.ok) return { success: false, error: 'Falha ao buscar artigos.' };
-            return json;
-          } catch (error) {
-            console.error('[Chat Tool] ❌ Erro ao chamar /api/search:', error);
-            return { success: false, error: 'Erro interno ao acessar o motor de busca.' };
-          }
+
+          const combinedQuery = queries.join(' | ');
+          const [insertedQuery] = await db
+            .insert(searchQueries)
+            .values({
+              originalQuery: combinedQuery,
+              status: 'proposed',
+              userId: null,
+            })
+            .returning();
+
+          return {
+            success: true,
+            proposed: true,
+            query_id: insertedQuery.id,
+            queries,
+            message:
+              'Plano de busca montado e apresentado ao usuário na tela para execução manual.',
+          };
         },
       }),
 
@@ -132,7 +203,6 @@ REGRAS ABSOLUTAS:
             `\n[Chat Tool] 🔗 add_article_by_doi chamado | doi=${doi} | query_id=${query_id}`
           );
           try {
-            // 1. Fetch CrossRef for metadata
             const crossRefUrl = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
             const crRes = await fetch(crossRefUrl, {
               headers: { 'User-Agent': 'SOLAssistant/1.0 (mailto:dev@example.com)' },
@@ -176,7 +246,6 @@ REGRAS ABSOLUTAS:
               }
             }
 
-            // 2. Verify the query_id exists
             const [query] = await db
               .select({ id: searchQueries.id })
               .from(searchQueries)
@@ -187,7 +256,6 @@ REGRAS ABSOLUTAS:
               return { success: false, error: 'query_id inválido ou não encontrado.' };
             }
 
-            // 3. Insert article into DB
             const [inserted] = await db
               .insert(articles)
               .values({
@@ -212,7 +280,6 @@ REGRAS ABSOLUTAS:
               return { success: false, error: 'Artigo com esse DOI já existe na pesquisa.' };
             }
 
-            // 4. Fire Inngest job to process it
             const { inngest } = await import('@/server/inngest/client');
             await inngest.send({
               name: 'app/process.articles.batch',
@@ -236,78 +303,35 @@ REGRAS ABSOLUTAS:
         },
       }),
 
-      generate_systematic_review: tool({
+      propose_search_global_database: tool({
         description:
-          'Lê até 10 artigos finalizados (status done ou abstract_only com TL;DR) e gera a Revisão Sistemática. Deve ser chamada automaticamente quando o processamento em background concluir.',
-        parameters: reviewSchema,
-        execute: async (args: z.infer<typeof reviewSchema>) => {
-          const { query_id, max_articles } = args;
-          console.log(
-            `\n[Chat Tool] 📚 generate_systematic_review chamado | query_id=${query_id} | max=${max_articles}`
-          );
-          // 1. Fetch finished articles for this query from Database
-          const finishedArticles = await db
-            .select()
-            .from(articles)
-            .where(eq(articles.queryId, query_id));
+          'Propõe uma busca na base científica global OpenAlex (ACM, IEEE) usando uma string simples em inglês. O usuário irá revisar o card de proposta e clicar em Executar no Front-end.',
+        parameters: z.object({
+          query: z
+            .string()
+            .describe(
+              'Termos de busca limpos em inglês. Ex: "software engineering gamification education"'
+            ),
+        }),
+        execute: async (args) => {
+          const { query } = args;
+          console.log(`\n[Chat Tool] 🌐 propose_search_global_database proposto com query:`, query);
 
-          // Accept both fully-processed and abstract-only articles
-          // Most articles end up as abstract_only when PDF link fails or redirects
-          const readyArticles = finishedArticles.filter(
-            (a) => (a.status === 'done' || a.status === 'abstract_only') && a.tldrContent
-          );
-          console.log(
-            `[Chat Tool] 📊 Artigos encontrados: total=${finishedArticles.length} | prontos=${readyArticles.length} | pendentes=${finishedArticles.filter((a) => a.status === 'pending').length} | falhas=${finishedArticles.filter((a) => a.status === 'failed').length}`
-          );
+          const [insertedQuery] = await db
+            .insert(searchQueries)
+            .values({
+              originalQuery: query,
+              status: 'proposed',
+              userId: null,
+            })
+            .returning();
 
-          if (readyArticles.length === 0) {
-            return {
-              success: false,
-              message: `Nenhum artigo com TL;DR encontrado. Status atual: ${finishedArticles.map((a) => a.status).join(', ') || 'nenhum'}. O Job Inngest pode ainda estar rodando.`,
-            };
-          }
-
-          // 2. Reranking: sort by citation count (desc) then fall back to array order
-          const sortedArticles = readyArticles.sort((a, b) => {
-            const cA = a.citationCount ?? 0;
-            const cB = b.citationCount ?? 0;
-            return cB - cA;
-          });
-          const topK = sortedArticles.slice(0, max_articles);
-
-          // 3. Prepare Context for Analyst Agent Prompt — include enriched metadata
-          let referencesContext = '';
-          const mappedReferences: string[] = [];
-
-          topK.forEach((art, idx) => {
-            const refNumber = idx + 1;
-            mappedReferences.push(
-              `[${refNumber}] ${art.authors} (${art.publicationYear}). ${art.title} - ${art.doi || 'Sem DOI'}`
-            );
-            referencesContext +=
-              `--- ARTIGO [${refNumber}] ---\n` +
-              `Título: ${art.title}\n` +
-              `Palavras-chave oficiais: ${art.keywords ?? 'N/A'}\n` +
-              `Citações: ${art.citationCount ?? 'N/A'}\n` +
-              `TL;DR: ${art.tldrContent}\n\n`;
-          });
-
-          // The tool result instructs the LLM (Analyst Agent) to generate the review.
-          // The orchestrator's streamText loop (maxSteps) picks this up and generates the streaming response.
           return {
             success: true,
-            analyst_instructions:
-              'Você é o autor principal de uma Revisão Sistemática de Literatura.\n' +
-              'Abaixo está o contexto de literatura extraído e validado.\n\n' +
-              'REGRAS ABSOLUTAS:\n' +
-              '1. Construa um texto coeso em Markdown dividido por temas encontrados.\n' +
-              '2. PARA TODA afirmação, tendência ou conclusão, você DEVE inserir a citação no formato [N] correspondente ao artigo.\n' +
-              '3. Se a informação não estiver no contexto fornecido, NÃO a mencione.\n' +
-              '4. Responda OBRIGATORIAMENTE em Português do Brasil.\n' +
-              '5. AO FINAL da revisão, inclua OBRIGATORIAMENTE esta seção separada por --- :\n' +
-              '---\n✅ **Revisão concluída.** Você está satisfeito com os resultados desta revisão bibliográfica, ou deseja ampliar a gama de bibliografia com novos termos de busca?\n\n' +
-              `CONTEXTO DOS ARTIGOS:\n${referencesContext}\n\n` +
-              `LISTA DE REFERÊNCIAS:\n${mappedReferences.join('\n')}`,
+            proposed: true,
+            query_id: insertedQuery.id,
+            query,
+            message: 'Plano de busca Global (OpenAlex) apresentado na tela para execução manual.',
           };
         },
       }),
@@ -321,11 +345,11 @@ REGRAS ABSOLUTAS:
 
       // Primary: use response.messages from SDK (most canonical form)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const fromResponse: any[] = e.response?.messages ?? [];
+      const fromResponse: Record<string, any>[] = e.response?.messages ?? [];
 
       // Fallback: reconstruct from event.steps when response.messages is empty
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const builtFromSteps: any[] = [];
+      const builtFromSteps: Record<string, any>[] = [];
       if (fromResponse.length === 0 && e.steps?.length > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const step of e.steps as any[]) {
@@ -365,20 +389,28 @@ REGRAS ABSOLUTAS:
             }
           }
         }
-        console.log(`[Chat Action] Built ${builtFromSteps.length} msgs from event.steps fallback`);
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const responseMsgs: any[] = fromResponse.length > 0 ? fromResponse : builtFromSteps;
       console.log(`[Chat Action] responseMsgs count:`, responseMsgs.length);
 
+      // Save summary if present
+      const tldrGeral = responseMsgs.find(
+        (m) => typeof m.content === 'string' && m.content.includes('📚 TL;DR Geral')
+      );
+
       // Find the active queryId
       let activeQueryId = queryId;
       if (!activeQueryId && e.steps?.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const step of e.steps as any[]) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const found = (step.toolResults ?? []).find(
-            (t: any) => t.toolName === 'search_sol_database' && t.result?.query_id
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (t: any) =>
+              (t.toolName === 'propose_search_sol_database' ||
+                t.toolName === 'propose_search_global_database') &&
+              t.result?.query_id
           );
           if (found) {
             activeQueryId = found.result.query_id;
@@ -389,10 +421,22 @@ REGRAS ABSOLUTAS:
 
       if (activeQueryId) {
         try {
-          await saveChatMessages(activeQueryId, [...messages, ...responseMsgs]);
+          // Save ONLY the last user message + new response messages.
+          // The rest of the history is already persisted from previous turns.
+          const lastUserMsg = messages[messages.length - 1];
+          const msgsToSave = lastUserMsg ? [lastUserMsg, ...responseMsgs] : responseMsgs;
+          await saveChatMessages(activeQueryId, msgsToSave);
           console.log(
-            `[Chat Action] 💾 Salvo ${messages.length + responseMsgs.length} msgs para query: ${activeQueryId}`
+            `[Chat Action] 💾 Salvo ${msgsToSave.length} msgs novas para query: ${activeQueryId}`
           );
+
+          if (tldrGeral) {
+            await db
+              .update(searchQueries)
+              .set({ summary: tldrGeral.content })
+              .where(eq(searchQueries.id, activeQueryId));
+            console.log(`[Chat Action] 📚 Resumo (summary) salvo para query: ${activeQueryId}`);
+          }
         } catch (error) {
           console.error('[Chat Action] Erro ao salvar histórico:', error);
         }
@@ -402,6 +446,7 @@ REGRAS ABSOLUTAS:
     },
   });
 
+  console.log('[Chat API] Finalizing response stream...');
   return result.toDataStreamResponse({
     sendUsage: true,
   });

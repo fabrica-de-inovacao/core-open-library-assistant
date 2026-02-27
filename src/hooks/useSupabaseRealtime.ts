@@ -6,22 +6,48 @@ import { type articles } from '@/server/db/schema';
 
 type Article = typeof articles.$inferSelect;
 
+const mapArticle = (raw: any): Article => ({
+  id: raw.id,
+  queryId: raw.query_id,
+  doi: raw.doi,
+  title: raw.title,
+  authors: raw.authors,
+  sourceName: raw.source_name,
+  publicationYear: raw.publication_year,
+  originalUrl: raw.original_url,
+  status: raw.status,
+  markdownContent: raw.markdown_content,
+  tldrContent: raw.tldr_content,
+  abstract: raw.abstract,
+  keywords: raw.keywords,
+  citationCount: raw.citation_count,
+  publisher: raw.publisher,
+  isOpenAccess: raw.is_open_access,
+  metadataSource: raw.metadata_source,
+  createdAt: raw.created_at ? new Date(raw.created_at) : new Date(),
+  updatedAt: raw.updated_at ? new Date(raw.updated_at) : new Date(),
+});
+
 export function useSupabaseRealtime(queryId: string | null) {
   const [data, setData] = useState<Article[]>([]);
 
   useEffect(() => {
+    console.log(`[useSupabaseRealtime] Hook mounted/queryId changed: ${queryId}`);
     if (!queryId) return;
 
     // Fetch initial data
     const fetchInitial = async () => {
+      console.log(`[useSupabaseRealtime] fetchInitial starting for ${queryId}`);
       const { data: initialData, error } = await supabase
         .from('articles')
         .select('*')
         .eq('query_id', queryId)
         .order('created_at', { ascending: false });
 
+      if (error) console.error('[useSupabaseRealtime] fetch error:', error);
       if (initialData && !error) {
-        setData(initialData as Article[]);
+        console.log(`[useSupabaseRealtime] fetchInitial got ${initialData.length} rows`);
+        setData(initialData.map(mapArticle));
       }
     };
 
@@ -42,34 +68,35 @@ export function useSupabaseRealtime(queryId: string | null) {
           console.log('Realtime Update:', payload);
           // Handle Insert
           if (payload.eventType === 'INSERT') {
-            setData((prev) => [payload.new as Article, ...prev]);
+            setData((prev) => [mapArticle(payload.new), ...prev]);
           }
-          // Handle Update — payload.new uses snake_case (DB columns) but our Article type uses camelCase (Drizzle).
-          // We must map explicitly, otherwise fields like tldrContent never update from Realtime events.
+          // Handle Update
           if (payload.eventType === 'UPDATE') {
-            const raw = payload.new as Record<string, unknown>;
+            const raw = payload.new as any;
             setData((prev) =>
               prev.map((item) => {
                 if (item.id !== raw.id) return item;
+                // Postgres Realtime `UPDATE` payloads contain the FULL row,
+                // so we can safely map it and fallback to `item` for missing fields
+                const mappedRaw = mapArticle(raw);
                 return {
                   ...item,
-                  // Map all snake_case DB columns to camelCase
-                  doi: (raw.doi as string | null) ?? item.doi,
-                  title: (raw.title as string) ?? item.title,
-                  authors: (raw.authors as string | null) ?? item.authors,
-                  sourceName: (raw.source_name as string | null) ?? item.sourceName,
-                  publicationYear: (raw.publication_year as number | null) ?? item.publicationYear,
-                  originalUrl: (raw.original_url as string) ?? item.originalUrl,
-                  status: (raw.status as string | null) ?? item.status,
-                  markdownContent: (raw.markdown_content as string | null) ?? item.markdownContent,
-                  tldrContent: (raw.tldr_content as string | null) ?? item.tldrContent,
-                  abstract: (raw.abstract as string | null) ?? item.abstract,
-                  keywords: (raw.keywords as string | null) ?? item.keywords,
-                  citationCount: (raw.citation_count as number | null) ?? item.citationCount,
-                  publisher: (raw.publisher as string | null) ?? item.publisher,
-                  isOpenAccess: (raw.is_open_access as boolean | null) ?? item.isOpenAccess,
-                  metadataSource: (raw.metadata_source as string | null) ?? item.metadataSource,
-                  updatedAt: raw.updated_at ? new Date(raw.updated_at as string) : item.updatedAt,
+                  doi: mappedRaw.doi ?? item.doi,
+                  title: mappedRaw.title ?? item.title,
+                  authors: mappedRaw.authors ?? item.authors,
+                  sourceName: mappedRaw.sourceName ?? item.sourceName,
+                  publicationYear: mappedRaw.publicationYear ?? item.publicationYear,
+                  originalUrl: mappedRaw.originalUrl ?? item.originalUrl,
+                  status: mappedRaw.status ?? item.status,
+                  markdownContent: mappedRaw.markdownContent ?? item.markdownContent,
+                  tldrContent: mappedRaw.tldrContent ?? item.tldrContent,
+                  abstract: mappedRaw.abstract ?? item.abstract,
+                  keywords: mappedRaw.keywords ?? item.keywords,
+                  citationCount: mappedRaw.citationCount ?? item.citationCount,
+                  publisher: mappedRaw.publisher ?? item.publisher,
+                  isOpenAccess: mappedRaw.isOpenAccess ?? item.isOpenAccess,
+                  metadataSource: mappedRaw.metadataSource ?? item.metadataSource,
+                  updatedAt: mappedRaw.updatedAt,
                 };
               })
             );

@@ -18,7 +18,7 @@ type SupportedProvider = 'google' | 'openai';
 
 /** Default models per provider */
 const DEFAULT_MODELS: Record<SupportedProvider, string> = {
-  google: 'gemini-1.5-flash',
+  google: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
 };
 

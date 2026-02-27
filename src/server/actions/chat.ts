@@ -13,13 +13,46 @@ export async function getChatMessages(queryId: string): Promise<Message[]> {
     .where(eq(chatMessages.queryId, queryId))
     .orderBy(asc(chatMessages.createdAt));
 
-  return dbMessages.map((msg) => ({
-    id: msg.id,
-    role: msg.role as 'system' | 'user' | 'assistant' | 'data',
-    content: msg.content,
+  const finalMessages: Message[] = [];
+
+  for (const msg of dbMessages) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolInvocations: msg.toolInvocations as any, // Restore Vercel AI SDK tool payload
-  }));
+    const invocations = (msg.toolInvocations as any[]) || [];
+
+    if (msg.role === 'tool') {
+      // Find the preceding assistant message to attach these results to
+      const prevAssistant = finalMessages[finalMessages.length - 1];
+      if (prevAssistant && prevAssistant.role === 'assistant') {
+        const existingInvocations = prevAssistant.toolInvocations || [];
+
+        invocations.forEach((ti) => {
+          const matchIdx = existingInvocations.findIndex((t) => t.toolCallId === ti.toolCallId);
+          if (matchIdx >= 0) {
+            // Upgrade call to result. Keep the arguments from the call.
+            existingInvocations[matchIdx] = {
+              ...existingInvocations[matchIdx],
+              state: 'result',
+              result: ti.result,
+            };
+          } else {
+            existingInvocations.push(ti);
+          }
+        });
+        prevAssistant.toolInvocations = existingInvocations;
+      }
+      // DONT push 'tool' role directly to the UI array
+      continue;
+    }
+
+    finalMessages.push({
+      id: msg.id,
+      role: msg.role as 'system' | 'user' | 'assistant' | 'data',
+      content: msg.content || '',
+      toolInvocations: invocations.length > 0 ? invocations : undefined,
+    });
+  }
+
+  return finalMessages;
 }
 
 export async function saveChatMessages(

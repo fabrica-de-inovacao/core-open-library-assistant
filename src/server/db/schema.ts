@@ -8,6 +8,7 @@ import {
   varchar,
   jsonb,
   boolean,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import type { AdapterAccount } from 'next-auth/adapters';
 
@@ -74,34 +75,43 @@ export const searchQueries = pgTable('search_queries', {
   userId: text('user_id').references(() => users.id),
   originalQuery: text('original_query').notNull(),
   expandedQuery: text('expanded_query'),
-  status: varchar('status', { length: 50 }).notNull(), // 'searching', 'processing', 'completed', 'failed'
+  summary: text('summary'), // Saved general TL;DR
+  status: varchar('status', { length: 50 }).notNull(), // 'proposed', 'searching', 'processing', 'done', 'failed', 'proposed'
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-export const articles = pgTable('articles', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  queryId: uuid('query_id')
-    .notNull()
-    .references(() => searchQueries.id, { onDelete: 'cascade' }),
-  doi: text('doi').unique(),
-  title: text('title').notNull(),
-  authors: text('authors'), // comma separated or JSON string
-  sourceName: text('source_name'),
-  publicationYear: integer('publication_year'),
-  originalUrl: text('original_url').notNull(),
-  status: varchar('status', { length: 50 }).notNull(), // 'pending', 'extracting', 'llm_processing', 'done', 'failed', 'abstract_only'
-  markdownContent: text('markdown_content'),
-  tldrContent: text('tldr_content'),
-  // --- Enriched Metadata ---
-  abstract: text('abstract'),
-  keywords: text('keywords'), // comma-separated list from SOL detail page or CrossRef
-  citationCount: integer('citation_count'),
-  publisher: text('publisher'),
-  isOpenAccess: boolean('is_open_access'),
-  metadataSource: varchar('metadata_source', { length: 50 }).default('scraper'), // 'scraper' | 'crossref' | 'manual'
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+export const articles = pgTable(
+  'articles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    queryId: uuid('query_id')
+      .notNull()
+      .references(() => searchQueries.id, { onDelete: 'cascade' }),
+    doi: text('doi'), // Removed global unique()
+    title: text('title').notNull(),
+    authors: text('authors'), // comma separated or JSON string
+    sourceName: text('source_name'),
+    publicationYear: integer('publication_year'),
+    originalUrl: text('original_url').notNull(),
+    status: varchar('status', { length: 50 }).notNull(), // 'pending', 'extracting', 'llm_processing', 'done', 'failed', 'abstract_only'
+    markdownContent: text('markdown_content'),
+    tldrContent: text('tldr_content'),
+    // --- Enriched Metadata ---
+    abstract: text('abstract'),
+    keywords: text('keywords'), // comma-separated list from SOL detail page or CrossRef
+    citationCount: integer('citation_count'),
+    publisher: text('publisher'),
+    isOpenAccess: boolean('is_open_access'),
+    metadataSource: varchar('metadata_source', { length: 50 }).default('scraper'), // 'scraper' | 'crossref' | 'manual'
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    // Ensures the same DOI is only processed once per query
+    // But allows the same DOI to exist in different queries
+    doiQueryIdx: uniqueIndex('doi_query_idx').on(table.queryId, table.doi),
+  })
+);
 
 export const chatMessages = pgTable('chat_messages', {
   id: uuid('id').primaryKey().defaultRandom(),

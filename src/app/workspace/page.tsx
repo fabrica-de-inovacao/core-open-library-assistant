@@ -1,8 +1,6 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo, Suspense, useCallback } from 'react';
-import { useChat } from 'ai/react';
 import { Message } from 'ai';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 
@@ -33,6 +31,14 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  PlusCircle,
+  Activity,
+  Terminal,
+  Check,
+  Play,
+  Globe,
 } from 'lucide-react';
 import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
 import { SidebarTrigger } from '@/components/ui/sidebar';
@@ -46,7 +52,8 @@ import {
 } from '@/components/ui/dialog';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useSearchParams, useParams, usePathname } from 'next/navigation';
+import { useRouter, useSearchParams, useParams, usePathname } from 'next/navigation';
+import { useChat } from 'ai/react';
 
 export default function WorkspacePage({ initialMessages }: { initialMessages?: Message[] }) {
   return (
@@ -56,153 +63,450 @@ export default function WorkspacePage({ initialMessages }: { initialMessages?: M
   );
 }
 
+/** Interactive card for search proposals */
+const SearchProposalCard = ({ queries, queryId, onExecute, isExecuted, isRunning }: any) => {
+  const [editableQueries, setEditableQueries] = useState<string[]>(queries || []);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const handleQueryChange = (index: number, newValue: string) => {
+    const updated = [...editableQueries];
+    updated[index] = newValue;
+    setEditableQueries(updated);
+  };
+
+  return (
+    <div className="border-border bg-card/50 mt-4 overflow-hidden rounded-xl border shadow-sm backdrop-blur-sm">
+      <div
+        className="border-border bg-muted/30 hover:bg-muted/50 flex cursor-pointer items-center justify-between border-b px-4 py-2.5 transition-colors"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <div className="flex items-center gap-2">
+          <Terminal className="h-4 w-4 text-sky-500" />
+          <span className="text-[11px] font-bold tracking-tight uppercase">
+            Estratégia de Busca SOL ({editableQueries.length} string
+            {editableQueries.length !== 1 ? 's' : ''})
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {isExecuted && (
+            <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 uppercase">
+              <Check className="h-3 w-3" /> Executado
+            </div>
+          )}
+          {isExpanded ? (
+            <ChevronUp className="text-muted-foreground h-4 w-4" />
+          ) : (
+            <ChevronDown className="text-muted-foreground h-4 w-4" />
+          )}
+        </div>
+      </div>
+
+      {isExpanded && (
+        <div className="bg-muted/10 border-border animate-in slide-in-from-top-1 fade-in border-b p-4 duration-200">
+          <div className="space-y-2">
+            {!isExecuted && (
+              <div className="text-muted-foreground px-1 text-[10px] font-bold tracking-wider uppercase">
+                Strings geradas (Edite se necessário):
+              </div>
+            )}
+            {editableQueries.map((q: string, i: number) => (
+              <Input
+                key={i}
+                value={q}
+                onChange={(e) => handleQueryChange(i, e.target.value)}
+                disabled={isExecuted}
+                title={q}
+                className={`bg-background h-8 w-full font-mono text-[11px] focus-visible:ring-1 focus-visible:ring-sky-500 ${isExecuted ? 'cursor-not-allowed opacity-70' : ''}`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isExecuted && (
+        <div className="bg-card/50 p-4">
+          <div className="flex flex-col gap-2">
+            <Button
+              onClick={() => onExecute(editableQueries, queryId)}
+              disabled={!queryId || isRunning}
+              className="w-full gap-2 transition-all hover:scale-[1.01] active:scale-[0.98]"
+              size="sm"
+            >
+              {!queryId ? (
+                <>
+                  <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" /> Preparando
+                  Card...
+                </>
+              ) : isRunning ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Buscando...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4" /> Executar Busca Agora
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const GlobalSearchProposalCard = ({ query, queryId, onExecute, isExecuted, isRunning }: any) => {
+  const [editableQuery, setEditableQuery] = useState<string>(query || '');
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  return (
+    <div className="border-border bg-card/50 mt-4 overflow-hidden rounded-xl border shadow-sm backdrop-blur-sm">
+      <div
+        className="border-border bg-muted/30 hover:bg-muted/50 flex cursor-pointer items-center justify-between border-b px-4 py-2.5 transition-colors"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <div className="flex items-center gap-2">
+          <Activity className="h-4 w-4 text-amber-500" />
+          <span className="text-[11px] font-bold tracking-tight uppercase">
+            Busca Global (OpenAlex)
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {isExecuted && (
+            <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 uppercase">
+              <Check className="h-3 w-3" /> Executado
+            </div>
+          )}
+          {isExpanded ? (
+            <ChevronUp className="text-muted-foreground h-4 w-4" />
+          ) : (
+            <ChevronDown className="text-muted-foreground h-4 w-4" />
+          )}
+        </div>
+      </div>
+
+      {isExpanded && (
+        <div className="bg-muted/10 border-border animate-in slide-in-from-top-1 fade-in border-b p-4 duration-200">
+          <div className="space-y-2">
+            {!isExecuted && (
+              <div className="text-muted-foreground px-1 text-[10px] font-bold tracking-wider uppercase">
+                Editar Query (Opcional):
+              </div>
+            )}
+            <Input
+              value={editableQuery}
+              onChange={(e) => setEditableQuery(e.target.value)}
+              disabled={isExecuted}
+              title={editableQuery}
+              className={`bg-background h-8 w-full font-mono text-[11px] focus-visible:ring-1 focus-visible:ring-amber-500 ${isExecuted ? 'cursor-not-allowed opacity-70' : ''}`}
+            />
+          </div>
+        </div>
+      )}
+
+      {!isExecuted && (
+        <div className="bg-card/50 p-4">
+          <div className="flex flex-col gap-2">
+            <Button
+              onClick={() => onExecute([editableQuery], queryId, true)}
+              disabled={!queryId || isRunning}
+              className="w-full gap-2 transition-all hover:scale-[1.01] active:scale-[0.98]"
+              size="sm"
+            >
+              {!queryId ? (
+                <>
+                  <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" /> Preparando
+                  Card...
+                </>
+              ) : isRunning ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Buscando Global...
+                </>
+              ) : (
+                <>
+                  <Globe className="h-4 w-4" /> Executar Busca Global
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ChatMessageItem = React.memo(
   ({
     m,
     setHighlightedRow,
     isStreaming,
+    userName,
+    onExecuteSearch,
+    executedProposalIds,
+    runningSearches,
   }: {
     m: Message;
     setHighlightedRow: (value: number | null) => void;
     isStreaming: boolean;
+    userName?: string | null;
+    onExecuteSearch?: (queries: string[], qId: string, isGlobal?: boolean) => void;
+    executedProposalIds?: Set<string>;
+    runningSearches?: Set<string>;
   }) => {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = () => {
+      navigator.clipboard.writeText(m.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    };
+
+    const isUser = m.role === 'user';
+    const userInitial = userName ? userName[0].toUpperCase() : 'U';
+
     return (
       <div
-        className={`chat-message-enter flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}
+        className={`chat-message-enter flex items-end gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
       >
+        {/* Avatar */}
         <div
-          className={`max-w-[90%] rounded-xl px-4 py-3 shadow-sm ${
-            m.role === 'user'
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold shadow-sm transition-transform hover:scale-105 ${
+            isUser
               ? 'bg-sky-600 text-white'
-              : 'border-border bg-card text-foreground border'
+              : 'bg-card text-sky-600 ring-1 ring-sky-500/20 dark:bg-zinc-900'
           }`}
         >
+          {isUser ? userInitial : <Library className="h-4 w-4" />}
+        </div>
+
+        {/* Message Content Wrapper */}
+        <div
+          className={`group relative flex max-w-[85%] flex-col ${isUser ? 'items-end' : 'items-start'}`}
+        >
           <span
-            className={`${m.role === 'user' ? 'text-sky-100' : 'text-muted-foreground'} mb-2 flex items-center gap-2 text-[11px] font-semibold tracking-wider uppercase`}
+            className={`mb-1.5 flex items-center gap-2 text-[10px] font-bold tracking-widest uppercase ${
+              isUser ? 'text-sky-400' : 'text-muted-foreground'
+            }`}
           >
-            {m.role === 'user' ? 'Você' : 'SOL Assistant'}
+            {isUser ? userName || 'Você' : 'SOL Assistant'}
             {isStreaming && (
               <span className="inline-flex gap-0.5">
-                <span
-                  className="h-1 w-1 animate-bounce rounded-full bg-sky-400"
-                  style={{ animationDelay: '0ms' }}
-                />
-                <span
-                  className="h-1 w-1 animate-bounce rounded-full bg-sky-400"
-                  style={{ animationDelay: '150ms' }}
-                />
-                <span
-                  className="h-1 w-1 animate-bounce rounded-full bg-sky-400"
-                  style={{ animationDelay: '300ms' }}
-                />
+                {[0, 150, 300].map((delay) => (
+                  <span
+                    key={delay}
+                    className="h-1 w-1 animate-bounce rounded-full bg-sky-400"
+                    style={{ animationDelay: `${delay}ms` }}
+                  />
+                ))}
               </span>
             )}
           </span>
+
           <div
-            className={`prose prose-sm max-w-none font-sans text-sm leading-relaxed ${
-              m.role === 'user' ? 'text-sky-50' : 'text-foreground dark:prose-invert'
+            className={`relative w-full rounded-2xl px-4 py-3 shadow-sm ring-1 transition-all ring-inset ${
+              isUser
+                ? 'rounded-tr-sm bg-sky-600 text-white ring-sky-500/50'
+                : 'border-border bg-card text-foreground ring-border/50 rounded-tl-sm border'
             }`}
           >
-            {/* During streaming: render plain text to avoid ReactMarkdown DOM churn on every token */}
-            {isStreaming ? (
-              <p className="m-0 whitespace-pre-wrap">{m.content}</p>
-            ) : (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  a: ({ href, children }) => {
-                    if (href?.startsWith('#article-row-')) {
-                      const index = parseInt(href.replace('#article-row-', ''), 10);
+            <div
+              className={`prose prose-sm max-w-none font-sans text-[14px] leading-relaxed ${
+                isUser ? 'prose-invert text-sky-50' : 'text-foreground dark:prose-invert'
+              }`}
+            >
+              {isStreaming ? (
+                <p className="m-0 whitespace-pre-wrap">{m.content}</p>
+              ) : (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    table({ children }) {
                       return (
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            setHighlightedRow(index);
-                            const el = document.getElementById(`article-row-${index}`);
-                            if (el) {
-                              el.scrollIntoView({
-                                behavior: 'smooth',
-                                block: 'center',
-                              });
-                            }
-                            setTimeout(() => setHighlightedRow(null), 3000);
-                          }}
-                          className="inline-flex items-center rounded bg-sky-500/10 px-1 font-mono font-bold text-sky-600 transition-colors hover:bg-sky-500/20 hover:text-sky-700 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:outline-none dark:bg-sky-900/40 dark:text-sky-400 dark:hover:bg-sky-800/60 dark:hover:text-sky-300"
-                        >
-                          [{index}]
-                        </button>
+                        <div className="my-4 w-full overflow-x-auto rounded-lg border border-zinc-200/50 dark:border-zinc-800/50">
+                          <table className="min-w-full divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
+                            {children}
+                          </table>
+                        </div>
                       );
-                    }
+                    },
+                    thead({ children }) {
+                      return (
+                        <thead className="bg-zinc-50/50 dark:bg-zinc-900/50">{children}</thead>
+                      );
+                    },
+                    th({ children }) {
+                      return (
+                        <th className="px-4 py-2 text-left text-[11px] font-bold tracking-tight text-zinc-500 uppercase">
+                          {children}
+                        </th>
+                      );
+                    },
+                    td({ children }) {
+                      return (
+                        <td className="px-4 py-2 text-[13px] text-zinc-600 dark:text-zinc-300">
+                          {children}
+                        </td>
+                      );
+                    },
+                    a({ href, children }) {
+                      const isArticleLink = href?.startsWith('#article-row-');
+                      return (
+                        <a
+                          href={href || '#'}
+                          onClick={(e) => {
+                            if (isArticleLink) {
+                              e.preventDefault();
+                              const id = (href as string).replace('#article-row-', '');
+                              setHighlightedRow(parseInt(id, 10));
+                              const el = document.getElementById(`article-row-${id}`);
+                              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                          }}
+                          className={`${
+                            isArticleLink
+                              ? 'underline decoration-sky-500/30 decoration-2 underline-offset-4 hover:text-sky-500 hover:decoration-sky-500'
+                              : 'text-sky-500 hover:text-sky-600 dark:text-sky-400'
+                          } font-semibold transition-all`}
+                        >
+                          {children}
+                        </a>
+                      );
+                    },
+                  }}
+                >
+                  {m.content.replace(/\[(\d+)\]/g, '[[**$1**]](#article-row-$1)')}
+                </ReactMarkdown>
+              )}
+            </div>
+
+            {/* Tool Indicators / Interactive Cards */}
+            {m.toolInvocations && m.toolInvocations.length > 0 && (
+              <div className="space-y-3">
+                {m.toolInvocations.map((toolInvocation: any) => {
+                  const { toolCallId, state, toolName, result } = toolInvocation;
+
+                  // 1. Rendering Interactive Proposal Cards
+                  console.log(`[UI] Tool Item: ${toolName}, state: ${state}, result:`, result);
+
+                  if (
+                    toolName === 'propose_search_sol_database' &&
+                    (state === 'result' || state === 'call') &&
+                    (result?.proposed || toolInvocation.args?.queries)
+                  ) {
+                    console.log(`[UI] Rendering SearchProposalCard in state: ${state}`);
+                    const queries = result?.queries || toolInvocation.args?.queries;
+                    const queryId = result?.query_id || toolInvocation.args?.query_id; // queryId might not be in call args
+
+                    if (!queries) return null;
+
                     return (
-                      <a
-                        href={href}
-                        className="font-medium text-sky-600 underline decoration-sky-500/30 underline-offset-4 hover:decoration-sky-500 dark:text-sky-400"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {children}
-                      </a>
+                      <SearchProposalCard
+                        key={toolCallId}
+                        queries={queries}
+                        queryId={queryId}
+                        onExecute={onExecuteSearch}
+                        isExecuted={queryId ? executedProposalIds?.has(queryId) : false}
+                        isRunning={queryId ? runningSearches.has(queryId) : false}
+                      />
                     );
-                  },
-                }}
-              >
-                {m.content.replace(/\[(\d+)\]/g, '[[**$1**]](#article-row-$1)')}
-              </ReactMarkdown>
-            )}
-          </div>
-
-          {/* Render Tool Invocations as subtle chips */}
-          {m.toolInvocations && m.toolInvocations.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {m.toolInvocations.map((toolInvocation: any) => {
-                const { toolCallId, state, toolName, result } = toolInvocation;
-
-                let loadingText = 'Processando...';
-                let successText = 'Concluído';
-                let isError = false;
-
-                if (toolName === 'search_sol_database') {
-                  loadingText = 'Buscando na base de dados...';
-                  if (state === 'result') {
-                    if (result?.success === false || result?.total_found === 0) {
-                      successText = 'Pesquisa concluída. Nenhum resultado.';
-                      isError = true;
-                    } else {
-                      successText = `Pesquisa concluída. ${result?.total_found || ''} artigos encontrados — Extração iniciada.`;
-                    }
                   }
-                } else if (toolName === 'generate_systematic_review') {
-                  loadingText = 'Analisando artigos e escrevendo revisão...';
-                  successText = 'Revisão Sistemática estruturada.';
-                }
 
-                return (
-                  <div
-                    key={toolCallId}
-                    className={`flex items-center gap-2 rounded border px-2 py-1.5 font-mono text-[10px] shadow-sm ${
-                      state === 'result'
-                        ? isError
-                          ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
-                          : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
-                        : 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/50 dark:bg-sky-900/20 dark:text-sky-400'
-                    }`}
-                  >
-                    {state === 'result' ? (
-                      <>
+                  if (
+                    toolName === 'propose_search_global_database' &&
+                    (state === 'result' || state === 'call') &&
+                    (result?.proposed || toolInvocation.args?.query)
+                  ) {
+                    console.log(`[UI] Rendering GlobalSearchProposalCard in state: ${state}`);
+                    const query = result?.query || toolInvocation.args?.query;
+                    const queryId = result?.query_id || toolInvocation.args?.query_id;
+
+                    if (!query) return null;
+
+                    return (
+                      <GlobalSearchProposalCard
+                        key={toolCallId}
+                        query={query}
+                        queryId={queryId}
+                        onExecute={onExecuteSearch}
+                        isExecuted={queryId ? executedProposalIds?.has(queryId) : false}
+                        isRunning={queryId ? runningSearches.has(queryId) : false}
+                      />
+                    );
+                  }
+
+                  // 2. Rendering Progress Pills
+                  let loadingText = 'Processando...';
+                  let successText = 'Concluído';
+                  let isError = false;
+
+                  if (toolName === 'search_sol_database' || toolName === 'search_global_database') {
+                    loadingText =
+                      toolName === 'search_global_database'
+                        ? 'Buscando Global (OpenAlex)...'
+                        : 'Buscando base de dados...';
+                    if (state === 'result') {
+                      if (result?.success === false || result?.total_found === 0) {
+                        successText = 'Nenhum resultado.';
+                        isError = true;
+                      } else {
+                        successText = `${result?.total_found} artigos — Extração iniciada.`;
+                      }
+                    }
+                  } else if (toolName === 'generate_systematic_review') {
+                    loadingText = 'Gerando síntese sistemática...';
+                    successText = 'Revisão concluída.';
+                  } else if (
+                    toolName === 'propose_search_sol_database' ||
+                    toolName === 'propose_search_global_database'
+                  ) {
+                    // Don't show progress pill for proposals if result is shown as a card,
+                    // but show it during loading.
+                    if (state === 'result') return null;
+                    loadingText = 'Elaborando estratégia de busca...';
+                  }
+
+                  return (
+                    <div
+                      key={toolCallId}
+                      className={`mt-3 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-mono text-[10px] whitespace-nowrap shadow-sm transition-all ${
+                        state === 'result'
+                          ? isError
+                            ? 'border-rose-200 bg-rose-50 text-rose-700'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                          : 'border-sky-200 bg-sky-50 text-sky-700'
+                      }`}
+                    >
+                      {state === 'result' ? (
                         <div
                           className={`h-1.5 w-1.5 rounded-full ${isError ? 'bg-rose-500' : 'bg-emerald-500'}`}
                         />
-                        <span>{successText}</span>
-                      </>
-                    ) : (
-                      <>
+                      ) : (
                         <Loader2 className="h-3 w-3 animate-spin text-sky-500" />
-                        <span>{loadingText}</span>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
+                      )}
+                      {state === 'result' ? successText : loadingText}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Assistant Actions (Copy) */}
+          {!isUser && !isStreaming && (
+            <div className="mt-1 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+              <button
+                onClick={handleCopy}
+                className="text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-medium transition-colors"
+              >
+                {copied ? (
+                  <>
+                    <span className="text-emerald-500">✓</span> Copiado
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3 w-3" /> Copiar
+                  </>
+                )}
+              </button>
             </div>
           )}
         </div>
@@ -210,11 +514,10 @@ const ChatMessageItem = React.memo(
     );
   },
   (prevProps, nextProps) => {
-    // Re-render when streaming state flips (plain text → markdown switch)
     if (prevProps.isStreaming !== nextProps.isStreaming) return false;
-    // Re-render when content changes (streaming tokens or edits)
     if (prevProps.m.content !== nextProps.m.content) return false;
-    // Re-render when tool invocations change
+    if (prevProps.userName !== nextProps.userName) return false;
+    if (prevProps.executedProposalIds?.size !== nextProps.executedProposalIds?.size) return false;
     const prevTools = JSON.stringify(prevProps.m.toolInvocations || []);
     const nextTools = JSON.stringify(nextProps.m.toolInvocations || []);
     if (prevTools !== nextTools) return false;
@@ -247,6 +550,7 @@ const TypingIndicator = () => (
 );
 
 function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const params = useParams();
   const pathname = usePathname();
@@ -256,6 +560,7 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
 
   const [highlightedRow, setHighlightedRowState] = useState<number | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [executedProposalIds, setExecutedProposalIds] = useState<Set<string>>(new Set());
 
   // Stable callback so ChatMessageItem React.memo is not busted on every Supabase tick
   const setHighlightedRow = useCallback((value: number | null) => {
@@ -263,7 +568,8 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
   }, []);
 
   // Authentication
-  const { status } = useSession();
+  const { data: session, status } = useSession();
+  const userName = session?.user?.name;
 
   // 1. Initial State for queryId
   const [sessionQueryId, setSessionQueryId] = useState<string | null>(
@@ -300,6 +606,64 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
     body: { queryId: sessionQueryId },
   });
 
+  const [runningSearches, setRunningSearches] = useState<Set<string>>(new Set());
+  const [zeroResultSearches, setZeroResultSearches] = useState<Set<string>>(new Set());
+
+  const handleExecuteSearch = useCallback(
+    async (queries: string[], qId: string, isGlobal = false) => {
+      setExecutedProposalIds((prev) => new Set(prev).add(qId));
+      setRunningSearches((prev) => new Set(prev).add(qId));
+      setZeroResultSearches((prev) => {
+        const n = new Set(prev);
+        n.delete(qId);
+        return n;
+      });
+
+      if (!qId) {
+        console.error('[UI] Cannot execute search: query_id is missing');
+        setRunningSearches((prev) => {
+          const n = new Set(prev);
+          n.delete(qId);
+          return n;
+        });
+        return;
+      }
+
+      try {
+        const searchEndPoint = isGlobal ? '/api/search/global' : '/api/search';
+        const params = new URLSearchParams();
+        queries.forEach((q) => params.append('q', q));
+        params.append('query_id', qId);
+
+        const res = await fetch(`${searchEndPoint}?${params.toString()}`);
+        const data = await res.json();
+
+        setRunningSearches((prev) => {
+          const n = new Set(prev);
+          n.delete(qId);
+          return n;
+        });
+
+        if (!data.success || data.total_found === 0) {
+          setZeroResultSearches((prev) => new Set(prev).add(qId));
+        }
+
+        if (data.success && data.total_found > 0) {
+          setSessionQueryId(qId);
+        }
+      } catch (err) {
+        console.error('Search execution failed:', err);
+        setRunningSearches((prev) => {
+          const n = new Set(prev);
+          n.delete(qId);
+          return n;
+        });
+        setZeroResultSearches((prev) => new Set(prev).add(qId));
+      }
+    },
+    []
+  );
+
   const isClearingRef = useRef(false);
 
   // Handle "Nova Busca" clicks by observing standard Next.js navigation changes
@@ -328,6 +692,11 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
       setShowLoginModal(true);
       return;
     }
+    // Clear stale session state for new manual input
+    setSessionQueryId(null);
+    localStorage.removeItem('sol_active_query_id');
+    reviewTriggeredRef.current = false;
+
     originalHandleSubmit(e);
   };
 
@@ -348,48 +717,66 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
   }, [messages]);
 
   // With maxSteps > 1, the tool invocation is on an intermediate message — not the final one.
+  // With maxSteps > 1, the tool invocation is on an intermediate message — not the final one.
   const activeQueryId = useMemo(() => {
-    if (sessionQueryId) return sessionQueryId;
-
-    for (const msg of messages) {
+    // Traverse backwards to find the LATEST query_id from search tools
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
       if (!msg.toolInvocations) continue;
       for (const tool of msg.toolInvocations as any[]) {
-        if (tool.toolName === 'search_sol_database' && 'result' in tool) {
+        if (
+          (tool.toolName === 'propose_search_sol_database' ||
+            tool.toolName === 'propose_search_global_database' ||
+            tool.toolName === 'search_sol_database' ||
+            tool.toolName === 'search_global_database') &&
+          'result' in tool
+        ) {
           const result = tool.result as { success: boolean; query_id?: string };
           if (result.success && result.query_id) return result.query_id;
         }
       }
     }
-    return null;
+    // Fallback to session/initial ID
+    return sessionQueryId;
   }, [messages, sessionQueryId]);
 
   const hasZeroResults = useMemo(() => {
     if (!activeQueryId) return false;
+    if (zeroResultSearches.has(activeQueryId)) return true;
     for (const msg of messages) {
       if (!msg.toolInvocations) continue;
       for (const tool of msg.toolInvocations as any[]) {
-        if (tool.toolName === 'search_sol_database' && 'result' in tool) {
+        if (
+          (tool.toolName === 'search_sol_database' || tool.toolName === 'search_global_database') &&
+          'result' in tool
+        ) {
           const result = tool.result as {
             success: boolean;
             query_id?: string;
             total_found?: number;
           };
-          if (result.query_id === activeQueryId && (result.total_found === 0 || !result.success)) {
+          if (
+            (result.query_id || tool.args?.query_id) === activeQueryId &&
+            (!result.success || (result.total_found !== undefined && result.total_found <= 5))
+          ) {
             return true;
           }
         }
       }
     }
     return false;
-  }, [messages, activeQueryId]);
+  }, [messages, activeQueryId, zeroResultSearches]);
 
   const isSearchRunning = useMemo(() => {
+    if (activeQueryId && runningSearches.has(activeQueryId)) return true;
     return messages.some((m) =>
       m.toolInvocations?.some(
-        (t: any) => t.toolName === 'search_sol_database' && t.state !== 'result'
+        (t: any) =>
+          (t.toolName === 'search_sol_database' || t.toolName === 'search_global_database') &&
+          t.state !== 'result'
       )
     );
-  }, [messages]);
+  }, [messages, activeQueryId, runningSearches]);
 
   // Pre-process messages before rendering:
   // 1. Hide [SISTEMA] prompts
@@ -427,18 +814,6 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
     return merged;
   }, [messages]);
 
-  // Persist to localStorage whenever we find a newly generated query_id from messages
-  useEffect(() => {
-    if (activeQueryId && activeQueryId !== sessionQueryId) {
-      // Defer state update to avoid synchronous cascading renders warning
-      const timeoutId = setTimeout(() => {
-        setSessionQueryId(activeQueryId);
-        localStorage.setItem('sol_active_query_id', activeQueryId);
-      }, 0);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [activeQueryId, sessionQueryId]);
-
   // articleCountRef holds the latest articles list for the zero-results timer check (no re-render)
   const articleCountRef = useRef<any[]>([]);
 
@@ -448,74 +823,123 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
       const currentPath = typeof window !== 'undefined' ? window.location.pathname : pathname;
       const targetPath = `/workspace/query/${activeQueryId}`;
       if (currentPath !== targetPath) {
-        // We use native history.replaceState because Next.js router.replace to a dynamic
-        // segment [id] triggers the Server Component (page.tsx) to fetch and remount,
-        // destroying the active chat streaming layout.
         window.history.replaceState(null, '', targetPath);
       }
     }
   }, [activeQueryId, pathname]);
 
-  // Stable ref for `append` — prevents onArticlesChange from recreating on every render
-  // (append from useChat is not stable; putting it in a ref avoids the prop-change cascade into ExtractionsPanel)
+  // Stable ref for `append`
   const appendRef = useRef(append);
   useEffect(() => {
     appendRef.current = append;
-  }); // runs after every render, before effects
+  }, [append]);
 
-  // Auto-trigger systematic review when all articles reach a terminal status
-  // ExtractionsPanel calls onArticlesChange which updates articleCountRef without a re-render
-  const reviewTriggeredRef = useRef(false);
+  const initTriggered =
+    typeof window !== 'undefined' && activeQueryId
+      ? localStorage.getItem(`sol_review_done_${activeQueryId}`) === 'true'
+      : false;
+  const reviewTriggeredRef = useRef(initTriggered);
+
+  // Sync the ref if activeQueryId changes
+  useEffect(() => {
+    if (activeQueryId && typeof window !== 'undefined') {
+      reviewTriggeredRef.current =
+        localStorage.getItem(`sol_review_done_${activeQueryId}`) === 'true';
+    }
+  }, [activeQueryId]);
+
+  // LIFTED: Fetch articles in the parent so we can conditionally render the split pane layout
+  const articles = useSupabaseRealtime(activeQueryId);
+  const hasArticles = articles && articles.length > 0;
+
   const onArticlesChange = useCallback(
-    (articles: any[]) => {
-      articleCountRef.current = articles;
-      // NOTE: no setState here — that would re-render WorkspaceContent on every Supabase tick
-      if (!activeQueryId || reviewTriggeredRef.current) return;
-      if (articles.length === 0) return;
+    (currentArticles: any[]) => {
+      articleCountRef.current = currentArticles;
+      if (!activeQueryId || reviewTriggeredRef.current || isLoading) return;
+      if (currentArticles.length === 0) return;
 
       const TERMINAL = ['done', 'abstract_only', 'failed'];
-      const allFinished = articles.every((a: any) => TERMINAL.includes(a.status ?? ''));
-      const hasContent = articles.some(
+      const allFinished = currentArticles.every((a: any) => TERMINAL.includes(a.status ?? ''));
+      const hasContent = currentArticles.some(
         (a: any) => (a.status === 'done' || a.status === 'abstract_only') && a.tldrContent
       );
 
       if (allFinished && hasContent && !reviewTriggeredRef.current) {
         reviewTriggeredRef.current = true;
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(`sol_review_done_${activeQueryId}`, 'true');
+        }
         localStorage.removeItem('sol_active_query_id');
-        appendRef.current({
-          role: 'user',
-          content: `[SISTEMA] Todos os artigos foram processados para a query ${activeQueryId}. Por favor, gere agora a Revisao Sistematica usando generate_systematic_review com query_id="${activeQueryId}" e max_articles=10.`,
-        });
+
+        const lowResultsHint =
+          currentArticles.length <= 5
+            ? ' (Poucos resultados encontrados. ALÉM do resumo, sugira IMEDIATAMENTE a busca global com propose_search_global_database)'
+            : '';
+
+        setTimeout(() => {
+          appendRef.current({
+            role: 'user',
+            content: `[SISTEMA_REVISAO_SISTEMATICA] ${activeQueryId}${lowResultsHint}`,
+          });
+        }, 100);
       }
     },
-    [activeQueryId] // stable: no `append`, no `isLoading` — uses refs instead
+    [activeQueryId, isLoading]
   );
 
-  // Reset trigger guard when a new query starts
+  // Need to sync articles whenever they change so onArticlesChange rules apply
   useEffect(() => {
-    reviewTriggeredRef.current = false;
-  }, [activeQueryId]);
+    onArticlesChange(articles);
+  }, [articles, onArticlesChange]);
 
-  // Zero-results safety net: if the search returned nothing after 60s, tell the AI
+  // No reset needed here, we want it to persist via localStorage or the calculated state above
+  // useEffect(() => {
+  //   reviewTriggeredRef.current = false;
+  // }, [activeQueryId]);
+
+  // Automatically trigger fallback if we officially have zero results
+  useEffect(() => {
+    if (hasZeroResults && !reviewTriggeredRef.current) {
+      reviewTriggeredRef.current = true;
+      const t = setTimeout(() => {
+        appendRef.current({
+          role: 'user',
+          content: `[SISTEMA] A busca na base SOL retornou poucos resultados (<= 5) ou falhou. Sugira IMEDIATAMENTE ao usuário tentar a busca na base global (OpenAlex) chamando a tool propose_search_global_database.`,
+        });
+      }, 500);
+      return () => clearTimeout(t);
+    }
+  }, [hasZeroResults]);
+
+  // Zero-results safety net (for unexpected delays without an explicit 0 results tool result)
   const zeroResultsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!activeQueryId || isLoading || hasZeroResults) return;
-
     zeroResultsTimerRef.current = setTimeout(() => {
       if (articleCountRef.current.length === 0 && !reviewTriggeredRef.current) {
         reviewTriggeredRef.current = true;
-        console.log('[WorkspaceContent] ⚠️ Zero articles after 60s — sending feedback to AI');
         appendRef.current({
           role: 'user',
-          content: `[SISTEMA] A busca para a query ${activeQueryId} foi concluída mas nenhum artigo foi encontrado ou processado. Por favor, informe o usuário que a busca não retornou resultados e sugira refinar os termos de pesquisa.`,
+          content: `[SISTEMA] A busca para a query ${activeQueryId} foi concluída mas nenhum artigo foi encontrado ou processado.`,
         });
       }
     }, 60_000);
-
     return () => {
       if (zeroResultsTimerRef.current) clearTimeout(zeroResultsTimerRef.current);
     };
-  }, [activeQueryId, isLoading, hasZeroResults]); // stable: no `append` dep — uses appendRef instead
+  }, [activeQueryId, isLoading, hasZeroResults]);
+
+  // Update sessionQueryId when activeQueryId changes
+  useEffect(() => {
+    if (activeQueryId && activeQueryId !== sessionQueryId) {
+      console.log(`[WorkspaceContent] 🔄 Switching active query to: ${activeQueryId}`);
+      const timeoutId = setTimeout(() => {
+        setSessionQueryId(activeQueryId);
+        localStorage.setItem('sol_active_query_id', activeQueryId);
+      }, 0);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeQueryId, sessionQueryId]);
 
   return (
     <div className="bg-background text-foreground flex h-screen w-full flex-col overflow-hidden font-sans">
@@ -596,10 +1020,14 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
           </div>
         </div>
       ) : (
-        /* Split Pane View for Active Search */
+        /* Dynamic Layout View for Active Search */
         <ResizablePanelGroup orientation="horizontal" className="w-full flex-1">
           {/* LEFT PANEL: Chat & AI Orchestration */}
-          <ResizablePanel defaultSize={40} minSize={30} className="bg-background flex flex-col">
+          <ResizablePanel
+            defaultSize={hasArticles ? 40 : 100}
+            minSize={30}
+            className={`bg-background flex flex-col ${!hasArticles ? 'border-border/50 mx-auto max-w-4xl border-x shadow-sm' : ''}`}
+          >
             <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-y-auto scroll-smooth p-6">
               <div className="mx-auto flex max-w-2xl flex-col gap-6 pb-6">
                 {displayMessages.map((m: Message) => {
@@ -609,12 +1037,20 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
                   const isStreaming = isLoading && isLastInTotal && m.role === 'assistant';
 
                   return (
-                    <ChatMessageItem
+                    <div
                       key={m.id}
-                      m={m}
-                      setHighlightedRow={setHighlightedRow}
-                      isStreaming={isStreaming}
-                    />
+                      className="animate-in fade-in slide-in-from-bottom-4 fill-mode-both duration-500"
+                    >
+                      <ChatMessageItem
+                        m={m}
+                        setHighlightedRow={setHighlightedRow}
+                        isStreaming={isStreaming}
+                        userName={userName}
+                        onExecuteSearch={handleExecuteSearch}
+                        executedProposalIds={executedProposalIds}
+                        runningSearches={runningSearches}
+                      />
+                    </div>
                   );
                 })}
                 {/* Typing indicator: show when loading but assistant hasn't started responding yet */}
@@ -629,44 +1065,75 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
             {/* Chat Input */}
             <div className="border-border bg-background border-t p-4">
               <form onSubmit={handleSubmit} className="relative mx-auto flex max-w-2xl gap-2">
-                <Input
-                  value={input}
-                  onChange={handleInputChange}
-                  placeholder="Resposta ou nova iteração..."
-                  className="border-border bg-card text-foreground h-12 rounded-md pr-12 font-sans text-sm shadow-sm transition-colors focus-visible:border-sky-500 focus-visible:ring-1 focus-visible:ring-sky-500"
-                  disabled={isLoading}
-                />
                 <Button
-                  type="submit"
+                  type="button"
                   size="icon"
-                  disabled={isLoading || !input.trim()}
-                  className="absolute top-1 right-1 h-10 w-10 rounded-md bg-sky-600 text-white shadow-sm transition-colors hover:bg-sky-500 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+                  variant="ghost"
+                  onClick={() => {
+                    setMessages([]);
+                    setSessionQueryId(null);
+                    router.push('/workspace');
+                  }}
+                  title="Nova Busca"
+                  className="text-muted-foreground h-12 w-12 rounded-lg hover:text-sky-500"
                 >
-                  {isLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4" />
-                  )}
+                  <PlusCircle className="h-5 w-5" />
                 </Button>
+                <div className="relative flex-1">
+                  <Input
+                    value={input}
+                    onChange={handleInputChange}
+                    placeholder="Resposta ou nova iteração..."
+                    className="border-border bg-card text-foreground h-12 rounded-lg pr-24 font-sans text-sm shadow-sm transition-all focus-visible:border-sky-500 focus-visible:ring-1 focus-visible:ring-sky-500"
+                    disabled={isLoading}
+                  />
+                  <div className="absolute top-1/2 right-2 flex -translate-y-1/2 items-center gap-2">
+                    <div className="text-muted-foreground mr-1 hidden items-center gap-1 font-mono text-[10px] sm:flex">
+                      <kbd className="bg-muted rounded border px-1">Ctrl</kbd>
+                      <span>+</span>
+                      <kbd className="bg-muted rounded border px-1">Enter</kbd>
+                    </div>
+                    <Button
+                      type="submit"
+                      size="icon"
+                      disabled={isLoading || !input.trim()}
+                      className="h-9 w-9 rounded-md bg-sky-600 text-white shadow-sm transition-all hover:bg-sky-500 focus-visible:ring-2 focus-visible:ring-sky-500"
+                    >
+                      {isLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
               </form>
             </div>
           </ResizablePanel>
 
-          <ResizableHandle
-            withHandle
-            className="bg-border w-1 transition-colors hover:bg-sky-500/50"
-          />
+          {hasArticles && (
+            <>
+              <ResizableHandle
+                withHandle
+                className="bg-border w-1 transition-colors hover:bg-sky-500/50"
+              />
 
-          {/* RIGHT PANEL: Data Grid */}
-          <ResizablePanel defaultSize={60} minSize={30}>
-            <ExtractionsPanel
-              activeQueryId={activeQueryId}
-              highlightedRow={highlightedRow}
-              onArticlesChange={onArticlesChange}
-              hasZeroResults={hasZeroResults}
-              isSearchRunning={isSearchRunning}
-            />
-          </ResizablePanel>
+              {/* RIGHT PANEL: Data Grid */}
+              <ResizablePanel
+                defaultSize={60}
+                minSize={30}
+                className="animate-in fade-in slide-in-from-right-4 fill-mode-both duration-700"
+              >
+                <ExtractionsPanel
+                  articles={articles}
+                  activeQueryId={activeQueryId}
+                  highlightedRow={highlightedRow}
+                  hasZeroResults={hasZeroResults}
+                  isSearchRunning={isSearchRunning}
+                />
+              </ResizablePanel>
+            </>
+          )}
         </ResizablePanelGroup>
       )}
 
@@ -726,29 +1193,41 @@ function WorkspaceContent({ initialMessages }: { initialMessages?: Message[] }) 
 
 const ExtractionsPanel = React.memo(
   ({
+    articles,
     activeQueryId,
     highlightedRow,
-    onArticlesChange,
     hasZeroResults,
     isSearchRunning,
   }: {
+    articles: any[];
     activeQueryId: string | null;
     highlightedRow: number | null;
-    onArticlesChange: (articles: any[]) => void;
     hasZeroResults: boolean;
     isSearchRunning: boolean;
   }) => {
-    const articles = useSupabaseRealtime(activeQueryId);
+    const [currentPage, setCurrentPage] = useState(1);
+    const PAGE_SIZE = 20;
 
     // Mapeia quais linhas estão expandidas (para ler o abstract/tldr completo)
     const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
     // Mapeia quais linhas estão selecionadas (checkbox)
     const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
 
-    // DIAGNOSTIC
+    // Reset pagination when activeQueryId changes
     useEffect(() => {
-      onArticlesChange(articles);
-    }, [articles, onArticlesChange]);
+      const t = setTimeout(() => {
+        setCurrentPage(1);
+        setExpandedRows(new Set());
+        setSelectedRows(new Set());
+      }, 0);
+      return () => clearTimeout(t);
+    }, [activeQueryId]);
+
+    const totalPages = Math.ceil(articles.length / PAGE_SIZE);
+    const paginatedArticles = articles.slice(
+      (currentPage - 1) * PAGE_SIZE,
+      currentPage * PAGE_SIZE
+    );
 
     const toggleRowExpansion = (id: string) => {
       setExpandedRows((prev) => {
@@ -779,7 +1258,6 @@ const ExtractionsPanel = React.memo(
     const copyToClipboard = async (text: string, description: string) => {
       try {
         await navigator.clipboard.writeText(text);
-        // Opcional: Adicionar um pequeno toast ou notificação aqui futuramente
         console.log(`Copiado: ${description}`);
       } catch (err) {
         console.error('Falha ao copiar', err);
@@ -864,31 +1342,58 @@ const ExtractionsPanel = React.memo(
                 Processamento assíncrono e extração de metadados em tempo real.
               </p>
             </div>
-            {selectedRows.size > 0 && (
-              <div className="animate-in fade-in zoom-in flex items-center gap-2 duration-200">
-                <span className="text-muted-foreground text-sm font-medium">
-                  {selectedRows.size} selecionado(s)
-                </span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8 gap-2 border-dashed">
-                      <Download className="h-3.5 w-3.5" />
-                      Exportar
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuLabel>Formato de Exportação</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => exportSelected('csv')}>
-                      Tabela CSV
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => exportSelected('bibtex')}>
-                      Citações BibTeX
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {totalPages > 1 && (
+                <div className="border-border bg-card flex items-center gap-1 rounded-lg border p-1 shadow-sm">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((p) => p - 1)}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="px-3 font-mono text-xs font-bold whitespace-nowrap">
+                    Página {currentPage} / {totalPages}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage((p) => p + 1)}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+              {selectedRows.size > 0 && (
+                <div className="animate-in fade-in zoom-in flex items-center gap-2 duration-200">
+                  <span className="text-muted-foreground text-sm font-medium">
+                    {selectedRows.size} selecionado(s)
+                  </span>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-8 gap-2 border-dashed">
+                        <Download className="h-3.5 w-3.5" />
+                        Exportar
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>Formato de Exportação</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => exportSelected('csv')}>
+                        Tabela CSV
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => exportSelected('bibtex')}>
+                        Citações BibTeX
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
+            </div>
           </div>
 
           {activeQueryId ? (
@@ -941,8 +1446,9 @@ const ExtractionsPanel = React.memo(
                     </tr>
                   </thead>
                   <tbody className="divide-border divide-y">
-                    {articles.map((article, idx) => {
-                      const rowNumber = idx + 1;
+                    {paginatedArticles.map((article, idx) => {
+                      const absoluteIndex = (currentPage - 1) * PAGE_SIZE + idx;
+                      const rowNumber = absoluteIndex + 1;
                       const isExpanded = expandedRows.has(article.id);
                       const isSelected = selectedRows.has(article.id);
 
@@ -1241,6 +1747,32 @@ const ExtractionsPanel = React.memo(
                   </div>
                 )}
               </div>
+
+              {totalPages > 1 && (
+                <div className="mt-2 flex items-center justify-center gap-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((p) => p - 1)}
+                    className="h-8 rounded-full px-4"
+                  >
+                    <ChevronLeft className="mr-2 h-4 w-4" /> Anterior
+                  </Button>
+                  <span className="text-muted-foreground text-xs font-medium">
+                    Página {currentPage} de {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage((p) => p + 1)}
+                    className="h-8 rounded-full px-4"
+                  >
+                    Próximo <ChevronRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </div>
+              )}
             </div>
           ) : isSearchRunning ? (
             <div className="border-border bg-muted/10 flex h-[400px] flex-col items-center justify-center rounded-xl border border-dashed text-center">

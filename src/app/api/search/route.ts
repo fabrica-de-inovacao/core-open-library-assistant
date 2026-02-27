@@ -40,43 +40,93 @@ export async function GET(request: Request) {
 
     const combinedQuery = qs.join(' | ');
     const userId = session?.user?.id ?? null;
-    console.log(`\n[Search] ⚡ Nova busca: ${qs.length} queries | userId: ${userId ?? 'anon'}`);
+    console.log(
+      `\n[SEARCH_VERIFY_V2] ⚡ NOVA BUSCA INICIADA: ${qs.length} queries | userId: ${userId ?? 'anon'}`
+    );
+    console.log(`[Search Trace] Referer:`, request.headers.get('referer'));
+    console.log(`[Search Trace] User-Agent:`, request.headers.get('user-agent'));
 
     // 1. Cache check — if this exact run was already processed, reuse it
     const [existingQuery] = await db
-      .select()
+      .select({
+        id: searchQueries.id,
+        status: searchQueries.status,
+        originalQuery: searchQueries.originalQuery,
+      })
       .from(searchQueries)
       .where(eq(searchQueries.originalQuery, combinedQuery))
       .limit(1);
 
+    let queryId = searchParams.get('query_id');
+
     if (existingQuery && existingQuery.status === 'done') {
-      console.log(`[Search] ✅ Cache hit! Reutilizando query existente: ${existingQuery.id}`);
+      console.log(`[Search] ✅ Cache hit! Query existente: ${existingQuery.id}`);
       const cachedArticles = await db
-        .select({ id: articles.id })
+        .select()
         .from(articles)
         .where(eq(articles.queryId, existingQuery.id));
+
+      let finalQueryId = existingQuery.id;
+
+      if (queryId && queryId !== existingQuery.id) {
+        console.log(
+          `[Search] 🔄 Copiando ${cachedArticles.length} artigos em cache para o novo queryId: ${queryId}`
+        );
+        if (cachedArticles.length > 0) {
+          await db.insert(articles).values(
+            cachedArticles.map((art) => ({
+              queryId: queryId as string,
+              doi: art.doi,
+              title: art.title,
+              authors: art.authors,
+              sourceName: art.sourceName,
+              publicationYear: art.publicationYear,
+              originalUrl: art.originalUrl,
+              status: art.status, // Keep as 'done' or 'abstract_only'
+              markdownContent: art.markdownContent,
+              tldrContent: art.tldrContent,
+              abstract: art.abstract,
+              keywords: art.keywords,
+              citationCount: art.citationCount,
+              publisher: art.publisher,
+              isOpenAccess: art.isOpenAccess,
+              metadataSource: art.metadataSource,
+            }))
+          );
+        }
+        await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
+        finalQueryId = queryId;
+      }
+
       return NextResponse.json({
         success: true,
         query: combinedQuery,
-        query_id: existingQuery.id,
+        query_id: finalQueryId,
         total_found: cachedArticles.length,
         cached: true,
-        message: 'Resultados reutilizados do cache. Nenhum processamento adicional necessário.',
+        message: 'Resultados reutilizados do cache. Cópias geradas para o novo ID se fornecido.',
       });
     }
 
-    // 2. Create a new SearchQuery Tracking Record in DB
-    const [insertedQuery] = await db
-      .insert(searchQueries)
-      .values({
-        originalQuery: combinedQuery,
-        status: 'searching',
-        userId: userId || null,
-      })
-      .returning();
-
-    const queryId = insertedQuery.id;
-    console.log(`[Search] 📝 QueryID criado: ${queryId}`);
+    // 2. Create or Update SearchQuery Tracking Record in DB
+    if (queryId) {
+      await db
+        .update(searchQueries)
+        .set({ status: 'searching' })
+        .where(eq(searchQueries.id, queryId));
+      console.log(`[Search] 📝 QueryID recebido e atualizado para searching: ${queryId}`);
+    } else {
+      const [insertedQuery] = await db
+        .insert(searchQueries)
+        .values({
+          originalQuery: combinedQuery,
+          status: 'searching',
+          userId: userId || null,
+        })
+        .returning();
+      queryId = insertedQuery.id;
+      console.log(`[Search] 📝 QueryID criado: ${queryId}`);
+    }
 
     // 2. Scraping Logic
     const allResults: Array<{
@@ -182,27 +232,122 @@ export async function GET(request: Request) {
     // Cap at 25 results
     const limitedResults = allResults.slice(0, 25);
 
-    // 3. Insert into Database
+    // 3. Insert into Database with DOI deduplication
     console.log(`[Search] 📊 Total após scraping: ${limitedResults.length} artigos`);
+
+    const newArticleIds: string[] = [];
+
     if (limitedResults.length > 0) {
-      await db
-        .insert(articles)
-        .values(
-          limitedResults.map((art) => ({
-            queryId: queryId,
-            doi: art.doi,
-            title: art.title,
-            authors: art.authors,
-            sourceName: art.sourceName,
-            publicationYear: art.year,
-            originalUrl: art.originalUrl,
-            status: 'pending',
-          }))
-        )
-        .onConflictDoNothing();
+      // --- DOI dedup: find articles already processed with these DOIs or URLs ---
+      const knownDois = limitedResults.map((r) => r.doi).filter(Boolean) as string[];
+
+      type ExistingArticle = {
+        id: string;
+        doi: string | null;
+        originalUrl: string | null;
+        title: string | null;
+        authors: string | null;
+        sourceName: string | null;
+        publicationYear: number | null;
+        status: string | null;
+        markdownContent: string | null;
+        tldrContent: string | null;
+        abstract: string | null;
+        keywords: string | null;
+        citationCount: number | null;
+        publisher: string | null;
+        isOpenAccess: boolean | null;
+        metadataSource: string | null;
+      };
+
+      // Fetch any already-processed articles matching these DOIs or URLs
+      let alreadyProcessed: ExistingArticle[] = [];
+      if (knownDois.length > 0) {
+        const { inArray } = await import('drizzle-orm');
+        alreadyProcessed = (await db
+          .select()
+          .from(articles)
+          .where(inArray(articles.doi, knownDois))) as ExistingArticle[];
+        // Keep only truly finished ones
+        alreadyProcessed = alreadyProcessed.filter(
+          (a) => a.status === 'done' || a.status === 'abstract_only'
+        );
+      }
+
+      const processedByDoi = new Map(alreadyProcessed.map((a) => [a.doi, a]));
+      const processedByUrl = new Map(alreadyProcessed.map((a) => [a.originalUrl, a]));
+
+      // Partition results into cached (reuse data) vs fresh (need extraction)
+      const toInsertFresh: typeof limitedResults = [];
+      const toInsertCached: ExistingArticle[] = [];
+
+      for (const art of limitedResults) {
+        const existing =
+          (art.doi && processedByDoi.get(art.doi)) || processedByUrl.get(art.originalUrl);
+        if (existing) {
+          toInsertCached.push(existing);
+        } else {
+          toInsertFresh.push(art);
+        }
+      }
+
       console.log(
-        `[Search] ✅ ${limitedResults.length} artigos inseridos no DB com queryId=${queryId}`
+        `[Search] ♻️ ${toInsertCached.length} artigos em cache (DOI match) | ${toInsertFresh.length} artigos novos para extração`
       );
+
+      // Insert cached articles directly (already processed — no Inngest needed)
+      if (toInsertCached.length > 0) {
+        const cachedRows = toInsertCached.map((src) => ({
+          queryId: queryId as string,
+          doi: src.doi ?? undefined,
+          title: src.title ?? '',
+          authors: src.authors ?? 'Desconhecido',
+          sourceName: src.sourceName ?? undefined,
+          publicationYear: src.publicationYear ?? undefined,
+          originalUrl: src.originalUrl ?? '',
+          status: (src.status ?? 'done') as 'done' | 'abstract_only',
+          markdownContent: src.markdownContent ?? undefined,
+          tldrContent: src.tldrContent ?? undefined,
+          abstract: src.abstract ?? undefined,
+          keywords: src.keywords ?? undefined,
+          citationCount: src.citationCount ?? undefined,
+          publisher: src.publisher ?? undefined,
+          isOpenAccess: src.isOpenAccess ?? undefined,
+          metadataSource: src.metadataSource ?? undefined,
+        }));
+        await db.insert(articles).values(cachedRows).onConflictDoNothing();
+        console.log(`[Search] ✅ ${cachedRows.length} artigos em cache inseridos sem re-extração`);
+      }
+
+      // Insert fresh articles (need Inngest processing)
+      if (toInsertFresh.length > 0) {
+        await db
+          .insert(articles)
+          .values(
+            toInsertFresh.map((art) => ({
+              queryId: queryId,
+              doi: art.doi,
+              title: art.title,
+              authors: art.authors,
+              sourceName: art.sourceName,
+              publicationYear: art.year,
+              originalUrl: art.originalUrl,
+              status: 'pending' as const,
+            }))
+          )
+          .onConflictDoNothing();
+        console.log(
+          `[Search] ✅ ${toInsertFresh.length} artigos novos inseridos com status pending`
+        );
+
+        // Fetch only the pending IDs (fresh ones) to dispatch to Inngest
+        const { and } = await import('drizzle-orm');
+        const pendingArticles = await db
+          .select({ id: articles.id })
+          .from(articles)
+          .where(and(eq(articles.queryId, queryId as string), eq(articles.status, 'pending')));
+        newArticleIds.push(...pendingArticles.map((a) => a.id));
+      }
     } else {
       console.warn(`[Search] ⚠️ Nenhum artigo encontrado — DB insert ignorado`);
     }
@@ -213,20 +358,12 @@ export async function GET(request: Request) {
       .set({ status: 'processing' })
       .where(eq(searchQueries.id, queryId));
 
-    // Queue integration (Inngest Fan-Out pattern)
-    // Send in batches of 5
-    if (limitedResults.length > 0) {
-      // Find the generated IDs for the articles inserted for this query
-      const insertedArticles = await db
-        .select({ id: articles.id })
-        .from(articles)
-        .where(eq(articles.queryId, queryId));
-      const articleIds = insertedArticles.map((a) => a.id);
-
+    // Queue integration (Inngest Fan-Out) — only dispatch truly new (pending) articles
+    if (newArticleIds.length > 0) {
       const batchSize = 3;
       const events = [];
-      for (let i = 0; i < articleIds.length; i += batchSize) {
-        const batch = articleIds.slice(i, i + batchSize);
+      for (let i = 0; i < newArticleIds.length; i += batchSize) {
+        const batch = newArticleIds.slice(i, i + batchSize);
         events.push({
           name: 'app/process.articles.batch',
           data: {
@@ -236,12 +373,15 @@ export async function GET(request: Request) {
         });
       }
 
-      // We dynamically import to avoid messing up edge handlers if any, but regular import is fine too if handled correctly
       const { inngest } = await import('@/server/inngest/client');
       await inngest.send(events);
       console.log(
-        `[Search] 🚀 ${events.length} evento(s) enviados ao Inngest com ${articleIds.length} artigo(s) total`
+        `[Search] 🚀 ${events.length} evento(s) enviados ao Inngest com ${newArticleIds.length} artigo(s) novos`
       );
+    } else if (limitedResults.length > 0) {
+      // All articles were served from cache — mark query as done immediately
+      await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
+      console.log(`[Search] ✅ Todos os artigos vieram do cache — query marcada como done`);
     }
 
     return NextResponse.json({
