@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import * as cheerio from 'cheerio';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, and } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
 import { auth } from '@/auth';
+import { inngest } from '@/server/inngest/client';
+import { rateLimit, getClientIp } from '@/lib/rate-limit';
+
+// F-04: 10 buscas por minuto por usuário/IP
+const searchLimiter = rateLimit({ limit: 10, windowMs: 60_000 });
 
 // Helper function to extract DOI from text or URL
 function extractDoi(text: string): string | null {
@@ -20,6 +25,26 @@ const QuerySchema = z.object({
 export async function GET(request: Request) {
   try {
     const session = await auth();
+
+    // F-04: Rate limiting — 10 req/min por usuário autenticado ou por IP
+    const rateLimitKey = session?.user?.id ?? getClientIp(request);
+    const rl = searchLimiter.check(rateLimitKey);
+    if (!rl.allowed) {
+      const retryAfterSec = Math.ceil((rl.resetAt - Date.now()) / 1000);
+      return NextResponse.json(
+        { success: false, error: 'Muitas requisições. Aguarde antes de tentar novamente.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfterSec),
+            'X-RateLimit-Limit': '10',
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': String(rl.resetAt),
+          },
+        }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const qs = searchParams.getAll('q').filter((q) => q.trim().length > 0);
 
@@ -263,7 +288,6 @@ export async function GET(request: Request) {
       // Fetch any already-processed articles matching these DOIs or URLs
       let alreadyProcessed: ExistingArticle[] = [];
       if (knownDois.length > 0) {
-        const { inArray } = await import('drizzle-orm');
         alreadyProcessed = (await db
           .select()
           .from(articles)
@@ -341,7 +365,6 @@ export async function GET(request: Request) {
         );
 
         // Fetch only the pending IDs (fresh ones) to dispatch to Inngest
-        const { and } = await import('drizzle-orm');
         const pendingArticles = await db
           .select({ id: articles.id })
           .from(articles)
@@ -373,7 +396,6 @@ export async function GET(request: Request) {
         });
       }
 
-      const { inngest } = await import('@/server/inngest/client');
       await inngest.send(events);
       console.log(
         `[Search] 🚀 ${events.length} evento(s) enviados ao Inngest com ${newArticleIds.length} artigo(s) novos`

@@ -14,32 +14,20 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
-import { Search, History, Settings, UserCircle, Library, FileText, LogOut } from 'lucide-react';
+import { Search, History, Settings, UserCircle, Sun, Moon } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession, signOut } from 'next-auth/react';
 import { getUserStats } from '@/server/actions/user';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
+import { useTheme } from '@/components/theme-provider';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 
 export function AppSidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
 
-  const [stats, setStats] = useState({ totalSearches: 0, totalArticles: 0 });
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-
-  useEffect(() => {
-    if (isProfileOpen && session?.user) {
-      getUserStats().then(setStats);
-    }
-  }, [isProfileOpen, session]);
+  const { resolvedTheme, toggleTheme } = useTheme();
 
   return (
     <Sidebar variant="sidebar" collapsible="icon">
@@ -48,13 +36,16 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link href="/workspace">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sky-500 text-white">
-                  <Library className="size-5" />
+                {/* SOL como monograma — mais distintivo que ícone genérico */}
+                <div className="bg-primary text-primary-foreground flex aspect-square size-8 shrink-0 items-center justify-center rounded-md shadow-sm">
+                  <span className="font-mono text-[11px] font-black tracking-tighter">SOL</span>
                 </div>
-                <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="text-foreground font-semibold tracking-tight">SOL Open</span>
-                  <span className="text-muted-foreground -mt-1 text-[10px] font-medium tracking-wider uppercase">
-                    Library Assistant
+                <div className="flex min-w-0 flex-col gap-0 leading-none">
+                  <span className="text-foreground truncate text-sm font-bold tracking-tight">
+                    Open Library
+                  </span>
+                  <span className="text-muted-foreground font-mono text-[9px] font-medium tracking-[0.18em] uppercase">
+                    SCBC
                   </span>
                 </div>
               </Link>
@@ -93,11 +84,24 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild>
+                <SidebarMenuButton asChild isActive={pathname.startsWith('/workspace/settings')}>
                   <Link href="/workspace/settings">
                     <Settings />
                     <span>Configurações</span>
                   </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  onClick={toggleTheme}
+                  tooltip={resolvedTheme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+                >
+                  {resolvedTheme === 'dark' ? (
+                    <Sun className="text-[oklch(0.72_0.16_72)]" />
+                  ) : (
+                    <Moon className="text-primary/60" />
+                  )}
+                  <span>{resolvedTheme === 'dark' ? 'Modo Claro' : 'Modo Escuro'}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -105,104 +109,47 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-border/50 border-t p-4">
+      <SidebarFooter className="border-border/50 border-t p-3">
         <SidebarMenu>
-          <Dialog open={isProfileOpen} onOpenChange={setIsProfileOpen}>
-            <DialogTrigger asChild>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  size="lg"
-                  className="h-12 cursor-pointer transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                >
-                  {session?.user?.image ? (
-                    <img
-                      src={session.user.image}
-                      alt={session.user.name || 'User Avatar'}
-                      referrerPolicy="no-referrer"
-                      className="border-border size-8 rounded-full border shadow-sm"
-                    />
-                  ) : (
-                    <UserCircle className="text-muted-foreground size-8" />
-                  )}
-                  <div className="flex flex-col gap-0.5 leading-none">
-                    <span className="text-foreground max-w-[140px] truncate font-medium">
-                      {session?.user?.name || 'Pesquisador'}
-                    </span>
-                    <span className="text-muted-foreground max-w-[140px] truncate text-xs">
-                      {session?.user?.email || 'SBC Acadêmico'}
-                    </span>
-                  </div>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </DialogTrigger>
-
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle className="text-center text-xl font-semibold tracking-tight">
-                  Seu Perfil
-                </DialogTitle>
-              </DialogHeader>
-
-              <div className="flex flex-col items-center gap-6 py-4">
-                {/* Avatar Grande */}
-                <div className="relative">
-                  {session?.user?.image ? (
-                    <img
-                      src={session.user.image}
-                      alt={session.user.name || 'User Avatar'}
-                      referrerPolicy="no-referrer"
-                      className="size-24 rounded-full border-4 border-white shadow-lg dark:border-slate-900"
-                    />
-                  ) : (
-                    <UserCircle className="text-muted-foreground size-24" />
-                  )}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              size="lg"
+              asChild
+              isActive={pathname.startsWith('/workspace/profile')}
+              className="h-12 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              <Link href="/workspace/profile">
+                {session?.user?.image ? (
+                  <img
+                    src={session.user.image}
+                    alt={session.user.name || 'User Avatar'}
+                    referrerPolicy="no-referrer"
+                    className="border-border size-8 rounded-full border shadow-sm"
+                  />
+                ) : (
+                  <UserCircle className="text-muted-foreground size-8" />
+                )}
+                <div className="flex min-w-0 flex-col gap-0.5 leading-none">
+                  <span className="text-foreground max-w-35 truncate font-medium">
+                    {session?.user?.name || 'Pesquisador'}
+                  </span>
+                  <span className="text-muted-foreground max-w-35 truncate text-xs">
+                    {session?.user?.email || 'Ver perfil'}
+                  </span>
                 </div>
-
-                {/* Info Text */}
-                <div className="flex flex-col items-center gap-1 text-center">
-                  <h3 className="text-foreground text-xl font-bold">
-                    {session?.user?.name || 'Pesquisador Visitante'}
-                  </h3>
-                  <p className="text-muted-foreground text-sm">
-                    {session?.user?.email || 'Nenhum email vinculado'}
-                  </p>
-                </div>
-
-                {/* Estatísticas (SciSpace Style Grid) */}
-                <div className="grid w-full grid-cols-2 gap-4 pt-2">
-                  <div className="flex flex-col items-center justify-center rounded-xl border border-sky-100 bg-sky-50/50 p-4 shadow-sm dark:border-sky-900/30 dark:bg-sky-900/10">
-                    <Search className="mb-2 size-5 text-sky-500" />
-                    <span className="text-2xl font-bold text-sky-700 dark:text-sky-400">
-                      {stats.totalSearches}
-                    </span>
-                    <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                      Buscas Feitas
-                    </span>
-                  </div>
-                  <div className="flex flex-col items-center justify-center rounded-xl border border-emerald-100 bg-emerald-50/50 p-4 shadow-sm dark:border-emerald-900/30 dark:bg-emerald-900/10">
-                    <FileText className="mb-2 size-5 text-emerald-500" />
-                    <span className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">
-                      {stats.totalArticles}
-                    </span>
-                    <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                      Artigos Indx
-                    </span>
-                  </div>
-                </div>
-
-                {/* Logout Button */}
-                <Button
-                  variant="outline"
-                  className="mt-4 w-full border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900/50 dark:hover:bg-rose-900/20 dark:hover:text-rose-400"
-                  onClick={() => signOut({ callbackUrl: '/login' })}
-                >
-                  <LogOut className="mr-2 size-4" />
-                  Sair da Conta
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
+        {/* Badge de versão — detalhe de produto profissional */}
+        <div className="mt-1 flex items-center justify-between px-2 pb-1 group-data-[collapsible=icon]:hidden">
+          <span className="text-muted-foreground/40 font-mono text-[9px] tracking-wider">
+            v0.9-beta
+          </span>
+          <span className="text-muted-foreground/40 font-mono text-[9px] tracking-wider">
+            SCBC · 2026
+          </span>
+        </div>
       </SidebarFooter>
     </Sidebar>
   );

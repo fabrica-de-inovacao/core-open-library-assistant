@@ -1,0 +1,83 @@
+# Configuração do projeto Serena
+# SOL Open Library Assistant
+
+# Nome pelo qual o projeto pode ser referenciado no Serena
+project_name: "sol-open-library-assistant"
+
+# Linguagens para as quais os language servers são iniciados.
+# TypeScript é o primário (Next.js app). Python cobre o worker em /worker.
+# Para JavaScript/TypeScript, usar "typescript".
+languages:
+- typescript
+- python
+
+# Encoding dos arquivos fonte
+encoding: "utf-8"
+
+# Backend de linguagem (LSP padrão para VS Code)
+language_backend: LSP
+
+# Respeitar .gitignore do projeto
+ignore_all_files_in_gitignore: true
+
+# Caminhos adicionais a ignorar (além do .gitignore)
+ignored_paths:
+- ".next/**"
+- "node_modules/**"
+- "worker/__pycache__/**"
+- "src/server/db/migrations/meta/**"
+- "public/**"
+
+# whether the project is in read-only mode
+# If set to true, all editing tools will be disabled and attempts to use them will result in an error
+# Added on 2025-04-18
+read_only: false
+
+# Ferramentas excluídas (nenhuma por padrão)
+excluded_tools: []
+
+# Ferramentas opcionais a incluir
+included_optional_tools: []
+
+# Modos base (sempre ativos, independente de parâmetros CLI)
+base_modes: []
+
+# Modos padrão (podem ser sobrescritos via CLI)
+default_modes:
+- "interactive"
+- "editing"
+
+# initial prompt for the project. It will always be given to the LLM upon activating the project
+# (contrary to the memories, which are loaded on demand).
+initial_prompt: |
+  Este é o projeto **SOL Open Library Assistant**, uma plataforma de revisão sistemática
+  de literatura científica com IA.
+
+  ## Stack principal
+  - **Frontend/Backend:** Next.js 16 (App Router) + React 19 + TypeScript
+  - **IA:** Vercel AI SDK `ai@3.4.15` (PINNED) + Google Gemini 2.5 Flash (padrão) / OpenAI
+  - **Banco de dados:** PostgreSQL via Supabase + Drizzle ORM
+  - **Fila:** Inngest (fan-out, concurrency=3)
+  - **Realtime:** Supabase WebSocket (`postgres_changes`)
+  - **Auth:** Auth.js v5 beta, estratégia JWT, Google OAuth
+  - **Worker Python:** FastAPI + PyMuPDF + Tesseract OCR, Dockerizado
+
+  ## Estrutura de diretórios chave
+  - `src/app/api/` — Route Handlers (chat, search, inngest)
+  - `src/server/db/` — Schema Drizzle + migrations
+  - `src/server/inngest/` — Pipeline de processamento de artigos
+  - `src/app/workspace/` — UI principal (monolito 1815 linhas)
+  - `worker/` — Microsserviço Python de extração de PDF
+  - `docs/analise-tecnica/` — Análise técnica e roadmap de melhorias
+
+  ## Contexto importante
+  - O AI SDK está PINADO — NÃO atualizar `ai` ou `@ai-sdk/google` sem análise
+  - A rota `/api/search/global` ainda não existe (Gap A-01 crítico)
+  - O worker Python tem URL hardcoded `http://127.0.0.1:8000` (Gap A-03 crítico)
+  - Ver `docs/analise-tecnica/gaps-e-melhorias.md` para o roadmap completo
+# Orçamento de tempo por tool call para informações de símbolo (null = usa global)
+symbol_info_budget:
+
+# fixed set of tools to use as the base tool set (if non-empty), replacing Serena's default set of tools.
+# This cannot be combined with non-empty excluded_tools or included_optional_tools.
+fixed_tools: []

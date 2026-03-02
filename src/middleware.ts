@@ -4,10 +4,15 @@ export default auth((req) => {
   const isLoggedIn = !!req.auth;
   const { nextUrl } = req;
 
+  // Rotas públicas que nunca requerem login
+  const isPublicRoute = nextUrl.pathname.startsWith('/share/') || nextUrl.pathname === '/share';
+
   // Protect /workspace/history, /workspace/settings, and any other sub-routes of workspace
   // Leave /workspace alone (exact match)
   const isProtectedRoute =
-    nextUrl.pathname.startsWith('/workspace/') && nextUrl.pathname !== '/workspace';
+    !isPublicRoute &&
+    nextUrl.pathname.startsWith('/workspace/') &&
+    nextUrl.pathname !== '/workspace';
   const isAuthRoute = nextUrl.pathname.startsWith('/login');
 
   if (isAuthRoute) {

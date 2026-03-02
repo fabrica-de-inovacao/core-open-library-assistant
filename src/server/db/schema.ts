@@ -70,8 +70,25 @@ export const verificationTokens = pgTable(
 
 // --- Core App Tables ---
 
+// Fase 1 (P-01): chat_sessions é o objeto primário.
+// Antes o chat era ancorado em queryId (1 query = 1 se pode conversarção).
+// Agora: 1 chatSession = N searchQueries + N chatMessages.
+// Isso elimina todas as race conditions de segunda busca.
+export const chatSessions = pgTable('chat_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  title: text('title'), // título human-readable (gerado após 1ª mensagem, P-17)
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// --- Core App Tables ---
+
 export const searchQueries = pgTable('search_queries', {
   id: uuid('id').primaryKey().defaultRandom(),
+  // Fase 1 (P-01): chatId vincula esta query à sessão de chat mãe.
+  // Nullable para compatibilidade retroativa com queries antigas.
+  chatId: uuid('chat_id').references(() => chatSessions.id, { onDelete: 'set null' }),
   userId: text('user_id').references(() => users.id),
   originalQuery: text('original_query').notNull(),
   expandedQuery: text('expanded_query'),
@@ -103,6 +120,9 @@ export const articles = pgTable(
     publisher: text('publisher'),
     isOpenAccess: boolean('is_open_access'),
     metadataSource: varchar('metadata_source', { length: 50 }).default('scraper'), // 'scraper' | 'crossref' | 'manual'
+    // I-03: embedding do abstract para reranking semântico (Fase 2)
+    // Serializado como JSON array: "[0.123, -0.456, ...]"
+    abstractEmbedding: text('abstract_embedding'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },
@@ -115,9 +135,10 @@ export const articles = pgTable(
 
 export const chatMessages = pgTable('chat_messages', {
   id: uuid('id').primaryKey().defaultRandom(),
-  queryId: uuid('query_id')
-    .notNull()
-    .references(() => searchQueries.id, { onDelete: 'cascade' }),
+  // Fase 1 (P-01): chatId é o novo identificador primário de sessão.
+  // queryId mantido como nullable para compatibilidade retroativa.
+  chatId: uuid('chat_id').references(() => chatSessions.id, { onDelete: 'cascade' }),
+  queryId: uuid('query_id').references(() => searchQueries.id, { onDelete: 'set null' }),
   role: varchar('role', { length: 50 }).notNull(), // 'user', 'assistant', 'system', 'data'
   content: text('content').notNull(),
   toolInvocations: jsonb('tool_invocations'), // To store Vercel AI SDK tool calls state if needed

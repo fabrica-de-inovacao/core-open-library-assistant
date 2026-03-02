@@ -46,14 +46,16 @@ export function SearchProposalCard({
 
   return (
     <div
-      className={`mt-3 mb-2 rounded-xl border p-4 shadow-sm transition-colors ${
+      className={`mt-3 mb-2 rounded-xl border border-l-4 p-4 shadow-sm transition-colors ${
         isExecuted
-          ? 'border-emerald-100 bg-emerald-50/50 dark:border-emerald-900/50 dark:bg-emerald-950/10'
-          : 'bg-card'
+          ? 'border-emerald-100 border-l-emerald-500 bg-emerald-50/50 dark:border-emerald-900/50 dark:border-l-emerald-600/70 dark:bg-emerald-950/10'
+          : source === 'openalex'
+            ? 'bg-card border-l-violet-500 dark:border-l-violet-600'
+            : 'border-l-primary bg-card'
       }`}
     >
       <div className="mb-3 flex items-center gap-2">
-        <Database className={`h-4 w-4 ${source === 'sol' ? 'text-sky-500' : 'text-purple-500'}`} />
+        <Database className={`h-4 w-4 ${source === 'sol' ? 'text-primary' : 'text-violet-500'}`} />
         <h4 className="text-sm font-semibold">{title}</h4>
       </div>
 
@@ -93,7 +95,7 @@ export function SearchProposalCard({
                       value={q}
                       onChange={(e) => handleQueryChange(idx, e.target.value)}
                       disabled={isExecuted || isExecuting}
-                      className="bg-muted/50 h-8 font-mono text-[11px] focus-visible:ring-sky-500"
+                      className={`bg-muted/50 focus-visible:ring-primary h-8 font-mono text-[11px] focus-visible:ring-1 ${isExecuted || isExecuting ? 'cursor-not-allowed' : ''}`}
                     />
                   </div>
                 ))}
@@ -145,8 +147,8 @@ export function SearchProposalCard({
             disabled={isExecuting || queries.some((q) => !q.trim())}
             className={`gap-2 shadow-sm ${
               source === 'openalex'
-                ? 'bg-purple-600 text-white hover:bg-purple-700'
-                : 'bg-sky-600 text-white hover:bg-sky-700'
+                ? 'bg-violet-600 text-white hover:bg-violet-700'
+                : 'bg-primary text-primary-foreground hover:bg-primary/90'
             }`}
           >
             {isExecuting ? (

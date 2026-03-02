@@ -20,4 +20,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: {
     strategy: 'jwt',
   },
+  callbacks: {
+    // Persiste o id do usuário (vindo do DB via adapter) no JWT
+    jwt({ token, user }) {
+      if (user?.id) token.id = user.id;
+      return token;
+    },
+    // Expõe o id do JWT na session acessível via `auth()` e `useSession()`
+    session({ session, token }) {
+      if (token.id && session.user) {
+        session.user.id = token.id as string;
+      }
+      return session;
+    },
+  },
 });

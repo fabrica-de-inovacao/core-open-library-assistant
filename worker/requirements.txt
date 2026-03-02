@@ -8,3 +8,5 @@ python-dotenv
 Pillow
 httpx
 beautifulsoup4
+# onnxruntime-gpu é instalado via Dockerfile após markitdown para garantir precedência.
+# Listado aqui para documentação — o Dockerfile gerencia a instalação corretamente.

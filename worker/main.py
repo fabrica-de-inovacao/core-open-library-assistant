@@ -9,6 +9,10 @@ from pdf2image import convert_from_bytes
 import tempfile
 import os
 import re
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SOL Extractor Worker")
 
@@ -23,7 +27,28 @@ def verify_token(x_worker_token: str = Header(...)):
     if x_worker_token != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid Worker Token")
 
-# Initializing MarkItDown
+# ---------------------------------------------------------------------------
+# Auto-detecção de GPU via ONNX Runtime
+# onnxruntime-gpu usa CUDAExecutionProvider quando disponível e cai para CPU
+# automaticamente — sem necessidade de configuração manual.
+# ---------------------------------------------------------------------------
+def _detect_and_log_device() -> list[str]:
+    try:
+        import onnxruntime as ort
+        available = ort.get_available_providers()
+        if "CUDAExecutionProvider" in available:
+            logger.info("[DEVICE] GPU detectada — ONNX usará CUDAExecutionProvider (CUDA)")
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        else:
+            logger.info("[DEVICE] GPU não disponível — ONNX usará CPUExecutionProvider")
+            return ["CPUExecutionProvider"]
+    except ImportError:
+        logger.warning("[DEVICE] onnxruntime não encontrado — sem suporte a modelos ONNX")
+        return ["CPUExecutionProvider"]
+
+ONNX_PROVIDERS = _detect_and_log_device()
+
+# Initializing MarkItDown (usa onnxruntime-gpu internamente via providers detectados)
 md = MarkItDown()
 
 async def download_file(url: str) -> bytes:
@@ -99,6 +124,10 @@ async def fallback_extract_abstract(url: str):
         if abstract_section:
             return abstract_section.get_text(strip=True)
         return "Abstract not found on page."
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "SOL Extractor Worker"}
 
 @app.post("/extract", dependencies=[Depends(verify_token)])
 async def extract_pdf(request: ExtractRequest):

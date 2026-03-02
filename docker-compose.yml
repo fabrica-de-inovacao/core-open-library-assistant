@@ -9,3 +9,13 @@ services:
       - ./worker:/app
     environment:
       - WORKER_API_KEY=sk_worker_6f8a9d2b4c1e3f5a7d9c0e2b4f6a8c0d2e4f6a8c0d2e4f6a8c0d2e4f6a8c0d2
+      # 'all' expõe todas as GPUs NVIDIA; onnxruntime-gpu cai para CPU se CUDA não estiver disponível
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

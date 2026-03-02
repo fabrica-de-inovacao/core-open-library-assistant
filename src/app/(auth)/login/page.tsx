@@ -6,13 +6,16 @@ export default function LoginPage() {
     <div className="bg-background flex min-h-screen items-center justify-center px-4">
       <div className="border-border bg-card w-full max-w-sm rounded-xl border p-8 shadow-2xl">
         <div className="mb-8 flex flex-col items-center justify-center">
-          <div className="mb-4 flex aspect-square size-12 items-center justify-center rounded-xl bg-sky-500 text-white shadow-lg shadow-sky-500/20">
+          <div className="bg-primary text-primary-foreground shadow-primary/20 mb-4 flex aspect-square size-12 items-center justify-center rounded-xl shadow-lg">
             <Library className="size-6" />
           </div>
           <h1 className="text-foreground text-center font-sans text-xl font-bold tracking-tight">
             SOL Open Library Assistant
           </h1>
-          <p className="text-muted-foreground mt-2 text-center text-sm">
+          <p className="text-muted-foreground mt-1 text-center font-mono text-[10px] font-medium tracking-widest uppercase">
+            SCBC · Biblioteca Científica
+          </p>
+          <p className="text-muted-foreground mt-3 text-center text-sm">
             Acesse para pesquisar e gerenciar suas revisões sistemáticas da literatura.
           </p>
         </div>
@@ -25,7 +28,7 @@ export default function LoginPage() {
         >
           <button
             type="submit"
-            className="border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground flex h-12 w-full items-center justify-center gap-3 rounded-full border px-4 py-2.5 text-base font-medium shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:outline-none"
+            className="border-border bg-background text-foreground hover:bg-accent focus-visible:ring-primary flex h-12 w-full items-center justify-center gap-3 rounded-full border px-4 py-2.5 text-base font-medium shadow-sm transition-all focus-visible:ring-2 focus-visible:outline-none"
           >
             <svg
               width="20"
