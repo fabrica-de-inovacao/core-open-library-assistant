@@ -1,3 +1,4 @@
+import { connection } from 'next/server';
 import WorkspacePage from '@/app/workspace/page';
 import { getChatMessages } from '@/server/actions/chat';
 
@@ -10,6 +11,9 @@ import { getChatMessages } from '@/server/actions/chat';
  * (substitui /workspace/query/[id] que ancorava em queryId)
  */
 export default async function ChatPage({ params }: { params: Promise<{ chatId: string }> }) {
+  // Sinaliza ao PPR que esta rota precisa de dados do request (não cacheavel)
+  await connection();
+
   const resolvedParams = await params;
   const messages = await getChatMessages(resolvedParams.chatId);
   console.log(

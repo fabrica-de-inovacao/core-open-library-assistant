@@ -5,6 +5,9 @@ import { db } from '@/server/db';
 import * as schema from '@/server/db/schema';
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  // Necessário para proxies e tunnels (ngrok, Vercel, etc.) que encaminham
+  // a requisição via X-Forwarded-Host — sem isso, o redirect_uri usa localhost.
+  trustHost: true,
   adapter: DrizzleAdapter(db, {
     usersTable: schema.users,
     accountsTable: schema.accounts,

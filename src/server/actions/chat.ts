@@ -1,8 +1,9 @@
 'use server';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { db } from '@/server/db';
 import { chatMessages, chatSessions } from '@/server/db/schema';
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, desc, and } from 'drizzle-orm';
 import type { UIMessage } from 'ai';
 import { randomUUID } from 'crypto';
 
@@ -17,7 +18,6 @@ function ensureUUID(id: string | undefined): string {
 // O AI SDK (ai@6) serializa tool results no formato ModelMessage como {type:'json', value:{...}}.
 // Ao salvar via response.messages e recarregar do DB, o campo `result` pode ter esse envelope.
 // Esta função desempacota de volta para o valor bruto esperado pelo ChatMessageItem.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function unwrapToolResult(result: any): any {
   if (result && typeof result === 'object' && result.type === 'json' && 'value' in result) {
     return result.value;
@@ -26,7 +26,6 @@ function unwrapToolResult(result: any): any {
 }
 
 // Converte um toolInvocation salvo no banco para parte de UIMessage
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function invocationToToolPart(
   ti: any,
   defaultState: 'output-available' | 'input-available' = 'input-available'
@@ -70,7 +69,6 @@ export async function getChatMessages(chatId: string): Promise<UIMessage[]> {
   const finalMessages: UIMessage[] = [];
 
   for (const msg of dbMessages) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const invocations = (msg.toolInvocations as any[]) || [];
 
     if (msg.role === 'tool') {
@@ -78,9 +76,7 @@ export async function getChatMessages(chatId: string): Promise<UIMessage[]> {
       const prevAssistant = finalMessages[finalMessages.length - 1];
       if (prevAssistant && prevAssistant.role === 'assistant') {
         invocations.forEach((ti: any) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const matchIdx = prevAssistant.parts.findIndex(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (p: any) => p.type?.startsWith('tool-') && p.toolCallId === ti.toolCallId
           );
           const newPart = invocationToToolPart(ti, 'output-available');
@@ -98,7 +94,6 @@ export async function getChatMessages(chatId: string): Promise<UIMessage[]> {
     const role = msg.role as string;
     if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const parts: any[] = [];
 
     if (typeof msg.content === 'string' && msg.content) {
@@ -117,6 +112,31 @@ export async function getChatMessages(chatId: string): Promise<UIMessage[]> {
     });
   }
 
+  // Fase 3 (P-23): Merge mensagens assistente consecutivas [apenas-tools + apenas-texto]
+  // num único UIMessage — garante que texto fique acima do card após reload do DB.
+  // Durante streaming o SDK já agrega text+tool num único UIMessage; esta lógica
+  // replica o mesmo comportamento ao reconstruir mensagens persistidas no banco.
+  for (let i = 0; i < finalMessages.length - 1; i++) {
+    const curr = finalMessages[i];
+    const next = finalMessages[i + 1];
+    if (curr.role !== 'assistant' || next.role !== 'assistant') continue;
+    const currHasText = curr.parts.some((p: any) => p.type === 'text');
+    const currHasTools = curr.parts.some(
+      (p: any) => typeof p.type === 'string' && p.type.startsWith('tool-')
+    );
+    const nextHasText = next.parts.some((p: any) => p.type === 'text');
+    const nextHasTools = next.parts.some(
+      (p: any) => typeof p.type === 'string' && p.type.startsWith('tool-')
+    );
+    // Apenas quando: curr tem só tools e next tem só texto (follow-up da tool)
+    if (!currHasText && currHasTools && nextHasText && !nextHasTools) {
+      const textParts = next.parts.filter((p: any) => p.type === 'text');
+      curr.parts.unshift(...textParts);
+      finalMessages.splice(i + 1, 1);
+      // Não incrementa i — reavalia posição para possíveis merges adicionais
+    }
+  }
+
   return finalMessages;
 }
 
@@ -125,12 +145,12 @@ export async function saveChatMessages(
   messages: Array<{
     id?: string;
     role: string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     content?: string | any[];
     // UIMessage format (ai@6): parts[] em vez de content
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     parts?: any[];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     toolInvocations?: any;
   }>,
   queryId?: string | null
@@ -139,11 +159,11 @@ export async function saveChatMessages(
 
   const toInsert = messages.map((m) => {
     let normalizedContent = '';
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const finalToolInvocations: any[] = m.toolInvocations ? [...m.toolInvocations] : [];
 
     // Suporte a UIMessage (ai@6): usa parts[] se content for undefined
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const contentSrc: string | any[] | undefined = m.content ?? (m.parts ? m.parts : undefined);
 
     if (typeof contentSrc === 'string') {
@@ -200,6 +220,12 @@ export async function saveChatMessages(
   // Wait, standard insert without conflict needs a unique constraint on ID to avoid throwing.
   // Since we use the message IDs from Vercel AI SDK, we can rely on onConflictDoNothing.
   await db.insert(chatMessages).values(toInsert).onConflictDoNothing({ target: chatMessages.id });
+
+  // Fase 7 (P-recents): bump updatedAt da sessão para manter ordenação por atividade recente.
+  // O schema não usa $onUpdate — precisamos atualizar manualmente.
+  if (chatId) {
+    await db.update(chatSessions).set({ updatedAt: new Date() }).where(eq(chatSessions.id, chatId));
+  }
 }
 
 /**
@@ -216,4 +242,53 @@ export async function createChatSession(userId: string | null): Promise<string> 
 
   if (!session) throw new Error('Falha ao criar chat session no banco de dados.');
   return session.id;
+}
+
+// ── RecentChat type (exportado para uso na sidebar) ──────────────────────────
+export type RecentChat = {
+  id: string;
+  title: string | null;
+  updatedAt: Date;
+};
+
+/**
+ * Retorna as últimas N sessões de chat do utilizador, para a sidebar.
+ */
+export async function getRecentChats(userId: string, limit = 5): Promise<RecentChat[]> {
+  const rows = await db
+    .select({
+      id: chatSessions.id,
+      title: chatSessions.title,
+      updatedAt: chatSessions.updatedAt,
+    })
+    .from(chatSessions)
+    .where(eq(chatSessions.userId, userId))
+    .orderBy(desc(chatSessions.updatedAt))
+    .limit(limit);
+
+  return rows;
+}
+
+/**
+ * Renomeia o título de uma sessão de chat (Fase 3 — sidebar actions).
+ */
+export async function renameChatSession(
+  chatId: string,
+  userId: string,
+  newTitle: string
+): Promise<void> {
+  await db
+    .update(chatSessions)
+    .set({ title: newTitle.trim() || null })
+    .where(and(eq(chatSessions.id, chatId), eq(chatSessions.userId, userId)));
+}
+
+/**
+ * Remove permanentemente uma sessão de chat e mensagens associadas (Fase 3 — sidebar actions).
+ * As mensagens são deletadas via cascade no banco.
+ */
+export async function deleteChatSession(chatId: string, userId: string): Promise<void> {
+  await db
+    .delete(chatSessions)
+    .where(and(eq(chatSessions.id, chatId), eq(chatSessions.userId, userId)));
 }

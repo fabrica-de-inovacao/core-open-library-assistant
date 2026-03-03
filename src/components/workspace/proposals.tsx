@@ -12,6 +12,8 @@ import {
   Play,
   Globe,
   Activity,
+  Pencil,
+  X,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -20,12 +22,13 @@ import {
 export type ExecuteSearchFn = (queries: string[], queryId: string, isGlobal?: boolean) => void;
 
 // ---------------------------------------------------------------------------
-// SearchProposalCard
+// SearchProposalCard — busca SOL
 // ---------------------------------------------------------------------------
 interface SearchProposalCardProps {
   queries: string[];
   queryId?: string;
   onExecute?: ExecuteSearchFn;
+  onCancel?: (queryId: string) => void;
   isExecuted?: boolean;
   isRunning?: boolean;
 }
@@ -34,6 +37,7 @@ export const SearchProposalCard = ({
   queries,
   queryId,
   onExecute,
+  onCancel,
   isExecuted,
   isRunning,
 }: SearchProposalCardProps) => {
@@ -47,79 +51,106 @@ export const SearchProposalCard = ({
   };
 
   return (
-    <div className="border-border bg-card/50 mt-4 overflow-hidden rounded-xl border shadow-sm backdrop-blur-sm">
-      <div
-        className="border-border bg-muted/30 hover:bg-muted/50 flex cursor-pointer items-center justify-between border-b px-4 py-2.5 transition-colors"
+    <div className="border-border bg-card mt-3 overflow-hidden rounded-xl border shadow-sm">
+      {/* Header clicável */}
+      <button
+        type="button"
         onClick={() => setIsExpanded(!isExpanded)}
+        className="border-border/60 bg-muted/30 hover:bg-muted/50 flex w-full items-center justify-between border-b px-4 py-2.5 transition-colors"
       >
         <div className="flex items-center gap-2">
-          <Terminal className="text-primary h-4 w-4" />
+          <Terminal className="text-primary h-3.5 w-3.5" />
           <span className="text-[11px] font-bold tracking-tight uppercase">
             Estratégia de Busca SOL ({editableQueries.length} string
             {editableQueries.length !== 1 ? 's' : ''})
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {isExecuted && (
-            <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 uppercase">
+          {isExecuted && !isRunning && (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 uppercase">
               <Check className="h-3 w-3" /> Executado
-            </div>
+            </span>
+          )}
+          {isExecuted && isRunning && (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-blue-400 uppercase">
+              <Loader2 className="h-3 w-3 animate-spin" /> Executando
+            </span>
+          )}
+          {isExecuted && isRunning && queryId && onCancel && (
+            <button
+              type="button"
+              title="Cancelar busca"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCancel(queryId);
+              }}
+              className="ml-1 rounded p-0.5 text-blue-400 transition-colors hover:bg-blue-500/20 hover:text-red-400"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {!isExecuted && !isRunning && (
+            <span className="text-muted-foreground flex items-center gap-1 text-[10px]">
+              <Pencil className="h-3 w-3" /> Editar
+            </span>
           )}
           {isExpanded ? (
-            <ChevronUp className="text-muted-foreground h-4 w-4" />
+            <ChevronUp className="text-muted-foreground h-3.5 w-3.5" />
           ) : (
-            <ChevronDown className="text-muted-foreground h-4 w-4" />
+            <ChevronDown className="text-muted-foreground h-3.5 w-3.5" />
           )}
         </div>
-      </div>
+      </button>
 
+      {/* Strings editáveis */}
       {isExpanded && (
-        <div className="bg-muted/10 border-border animate-in slide-in-from-top-1 fade-in border-b p-4 duration-200">
-          <div className="space-y-2">
-            {!isExecuted && (
-              <div className="text-muted-foreground px-1 text-[10px] font-bold tracking-wider uppercase">
-                Strings geradas (Edite se necessário):
-              </div>
-            )}
-            {editableQueries.map((q: string, i: number) => (
-              <Input
-                key={i}
-                value={q}
-                onChange={(e) => handleQueryChange(i, e.target.value)}
-                disabled={isExecuted}
-                title={q}
-                className={`bg-background focus-visible:ring-primary h-8 w-full font-mono text-[11px] focus-visible:ring-1 ${isExecuted ? 'cursor-not-allowed opacity-70' : ''}`}
-              />
-            ))}
-          </div>
+        <div className="animate-in slide-in-from-top-1 fade-in border-border/60 bg-muted/10 space-y-2 border-b p-4 duration-200">
+          {!isExecuted && (
+            <p className="text-muted-foreground mb-1 px-0.5 text-[10px] font-bold tracking-wider uppercase">
+              Strings geradas — edite se necessário:
+            </p>
+          )}
+          {editableQueries.map((q: string, i: number) => (
+            <Input
+              key={i}
+              value={q}
+              onChange={(e) => handleQueryChange(i, e.target.value)}
+              disabled={isExecuted}
+              title={q}
+              className={`bg-background focus-visible:ring-primary h-8 w-full font-mono text-[11px] focus-visible:ring-1 ${
+                isExecuted ? 'cursor-not-allowed opacity-60' : ''
+              }`}
+            />
+          ))}
         </div>
       )}
 
+      {/* Botão de execução */}
       {!isExecuted && (
-        <div className="bg-card/50 p-4">
-          <div className="flex flex-col gap-2">
-            <Button
-              onClick={() => queryId && onExecute?.(editableQueries, queryId)}
-              disabled={!queryId || isRunning}
-              className="w-full gap-2 transition-all hover:scale-[1.01] active:scale-[0.98]"
-              size="sm"
-            >
-              {!queryId ? (
-                <>
-                  <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" /> Preparando
-                  Card...
-                </>
-              ) : isRunning ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Buscando...
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4" /> Executar Busca Agora
-                </>
-              )}
-            </Button>
-          </div>
+        <div className="bg-card/60 px-4 py-3">
+          <Button
+            onClick={() => queryId && onExecute?.(editableQueries, queryId)}
+            disabled={!queryId || isRunning}
+            className="w-full gap-2 transition-all hover:scale-[1.01] active:scale-[0.99]"
+            size="sm"
+          >
+            {!queryId ? (
+              <>
+                <Loader2 className="text-muted-foreground h-3.5 w-3.5 animate-spin" />
+                Preparando…
+              </>
+            ) : isRunning ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Buscando…
+              </>
+            ) : (
+              <>
+                <Play className="h-3.5 w-3.5" />
+                Executar Busca Agora
+              </>
+            )}
+          </Button>
         </div>
       )}
     </div>
@@ -127,12 +158,13 @@ export const SearchProposalCard = ({
 };
 
 // ---------------------------------------------------------------------------
-// GlobalSearchProposalCard
+// GlobalSearchProposalCard — busca OpenAlex
 // ---------------------------------------------------------------------------
 interface GlobalSearchProposalCardProps {
   query: string;
   queryId?: string;
   onExecute?: ExecuteSearchFn;
+  onCancel?: (queryId: string) => void;
   isExecuted?: boolean;
   isRunning?: boolean;
 }
@@ -141,6 +173,7 @@ export const GlobalSearchProposalCard = ({
   query,
   queryId,
   onExecute,
+  onCancel,
   isExecuted,
   isRunning,
 }: GlobalSearchProposalCardProps) => {
@@ -148,75 +181,103 @@ export const GlobalSearchProposalCard = ({
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
-    <div className="border-border bg-card/50 mt-4 overflow-hidden rounded-xl border shadow-sm backdrop-blur-sm">
-      <div
-        className="border-border bg-muted/30 hover:bg-muted/50 flex cursor-pointer items-center justify-between border-b px-4 py-2.5 transition-colors"
+    <div className="bg-card mt-3 overflow-hidden rounded-xl border border-amber-200/60 shadow-sm dark:border-amber-800/40">
+      {/* Header */}
+      <button
+        type="button"
         onClick={() => setIsExpanded(!isExpanded)}
+        className="flex w-full items-center justify-between border-b border-amber-200/40 bg-amber-50/60 px-4 py-2.5 transition-colors hover:bg-amber-50/80 dark:border-amber-800/30 dark:bg-amber-950/20 dark:hover:bg-amber-950/30"
       >
         <div className="flex items-center gap-2">
-          <Activity className="h-4 w-4 text-amber-500" />
-          <span className="text-[11px] font-bold tracking-tight uppercase">
+          <Activity className="h-3.5 w-3.5 text-amber-500" />
+          <span className="text-[11px] font-bold tracking-tight text-amber-700 uppercase dark:text-amber-400">
             Busca Global (OpenAlex)
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {isExecuted && (
-            <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 uppercase">
+          {isExecuted && !isRunning && (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 uppercase">
               <Check className="h-3 w-3" /> Executado
-            </div>
+            </span>
+          )}
+          {isExecuted && isRunning && (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-blue-400 uppercase">
+              <Loader2 className="h-3 w-3 animate-spin" /> Executando
+            </span>
+          )}
+          {isExecuted && isRunning && queryId && onCancel && (
+            <button
+              type="button"
+              title="Cancelar busca global"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCancel(queryId);
+              }}
+              className="ml-1 rounded p-0.5 text-blue-400 transition-colors hover:bg-amber-500/20 hover:text-red-400"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {!isExecuted && !isRunning && (
+            <span className="text-muted-foreground flex items-center gap-1 text-[10px]">
+              <Pencil className="h-3 w-3" /> Editar
+            </span>
           )}
           {isExpanded ? (
-            <ChevronUp className="text-muted-foreground h-4 w-4" />
+            <ChevronUp className="text-muted-foreground h-3.5 w-3.5" />
           ) : (
-            <ChevronDown className="text-muted-foreground h-4 w-4" />
+            <ChevronDown className="text-muted-foreground h-3.5 w-3.5" />
           )}
         </div>
-      </div>
+      </button>
 
+      {/* Query editável */}
       {isExpanded && (
-        <div className="bg-muted/10 border-border animate-in slide-in-from-top-1 fade-in border-b p-4 duration-200">
-          <div className="space-y-2">
-            {!isExecuted && (
-              <div className="text-muted-foreground px-1 text-[10px] font-bold tracking-wider uppercase">
-                Editar Query (Opcional):
-              </div>
-            )}
-            <Input
-              value={editableQuery}
-              onChange={(e) => setEditableQuery(e.target.value)}
-              disabled={isExecuted}
-              title={editableQuery}
-              className={`bg-background h-8 w-full font-mono text-[11px] focus-visible:ring-1 focus-visible:ring-amber-500 ${isExecuted ? 'cursor-not-allowed opacity-70' : ''}`}
-            />
-          </div>
+        <div className="animate-in slide-in-from-top-1 fade-in bg-muted/10 space-y-2 border-b border-amber-200/40 p-4 duration-200 dark:border-amber-800/30">
+          {!isExecuted && (
+            <p className="text-muted-foreground mb-1 px-0.5 text-[10px] font-bold tracking-wider uppercase">
+              Editar query (opcional):
+            </p>
+          )}
+          <Input
+            value={editableQuery}
+            onChange={(e) => setEditableQuery(e.target.value)}
+            disabled={isExecuted}
+            title={editableQuery}
+            className={`bg-background h-8 w-full font-mono text-[11px] focus-visible:ring-1 focus-visible:ring-amber-500 ${
+              isExecuted ? 'cursor-not-allowed opacity-60' : ''
+            }`}
+          />
         </div>
       )}
 
+      {/* Botão */}
       {!isExecuted && (
-        <div className="bg-card/50 p-4">
-          <div className="flex flex-col gap-2">
-            <Button
-              onClick={() => queryId && onExecute?.([editableQuery], queryId, true)}
-              disabled={!queryId || isRunning}
-              className="w-full gap-2 transition-all hover:scale-[1.01] active:scale-[0.98]"
-              size="sm"
-            >
-              {!queryId ? (
-                <>
-                  <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" /> Preparando
-                  Card...
-                </>
-              ) : isRunning ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Buscando Global...
-                </>
-              ) : (
-                <>
-                  <Globe className="h-4 w-4" /> Executar Busca Global
-                </>
-              )}
-            </Button>
-          </div>
+        <div className="bg-card/60 px-4 py-3">
+          <Button
+            onClick={() => queryId && onExecute?.([editableQuery], queryId, true)}
+            disabled={!queryId || isRunning}
+            variant="outline"
+            className="w-full gap-2 border-amber-300 text-amber-700 transition-all hover:scale-[1.01] hover:bg-amber-50 hover:text-amber-800 active:scale-[0.99] dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/40"
+            size="sm"
+          >
+            {!queryId ? (
+              <>
+                <Loader2 className="text-muted-foreground h-3.5 w-3.5 animate-spin" />
+                Preparando…
+              </>
+            ) : isRunning ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Buscando Global…
+              </>
+            ) : (
+              <>
+                <Globe className="h-3.5 w-3.5" />
+                Executar Busca Global
+              </>
+            )}
+          </Button>
         </div>
       )}
     </div>

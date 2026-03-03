@@ -1,7 +1,6 @@
-'use client';
+﻿'use client';
 
-import { useState, useEffect } from 'react';
-
+import { useState } from 'react';
 import {
   Sidebar,
   SidebarContent,
@@ -11,146 +10,176 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
+  useSidebar,
 } from '@/components/ui/sidebar';
-import { Search, History, Settings, UserCircle, Sun, Moon } from 'lucide-react';
+import { BookOpenText, PanelLeftClose, Plus } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useSession, signOut } from 'next-auth/react';
-import { getUserStats } from '@/server/actions/user';
-import { useTheme } from '@/components/theme-provider';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import { usePathname, useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import { cn, isActive } from '@/lib/utils';
+import { ShareDialog } from '@/components/ShareDialog';
+import { useRecentChats } from '@/hooks/useRecentChats';
+import { SIDEBAR_ICON_WIDTH, NAV_ROUTES } from '@/components/sidebar/sidebar.config';
+import { NavItem } from '@/components/sidebar/NavItem';
+import { RecentChatItem, RecentChatsSkeleton } from '@/components/sidebar/RecentChatItem';
+import { SidebarExpandButton } from '@/components/sidebar/SidebarExpandButton';
+import { UserMenuPopover } from '@/components/sidebar/UserMenuPopover';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { data: session } = useSession();
+  const { state, toggleSidebar } = useSidebar();
 
-  const { resolvedTheme, toggleTheme } = useTheme();
+  const { chats, isLoading, rename, remove } = useRecentChats(session?.user?.id, pathname);
+  const [shareDialogChatId, setShareDialogChatId] = useState<string | null>(null);
+
+  const handleDelete = async (chatId: string) => {
+    if (isActive(pathname, `/workspace/chat/${chatId}`)) router.push('/workspace');
+    await remove(chatId);
+  };
 
   return (
-    <Sidebar variant="sidebar" collapsible="icon">
-      <SidebarHeader className="border-border/50 border-b py-4">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
-              <Link href="/workspace">
-                {/* SOL como monograma — mais distintivo que ícone genérico */}
-                <div className="bg-primary text-primary-foreground flex aspect-square size-8 shrink-0 items-center justify-center rounded-md shadow-sm">
-                  <span className="font-mono text-[11px] font-black tracking-tighter">SOL</span>
-                </div>
-                <div className="flex min-w-0 flex-col gap-0 leading-none">
-                  <span className="text-foreground truncate text-sm font-bold tracking-tight">
-                    Open Library
-                  </span>
-                  <span className="text-muted-foreground font-mono text-[9px] font-medium tracking-[0.18em] uppercase">
-                    SCBC
-                  </span>
-                </div>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Pesquisa</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={pathname === '/workspace'}>
-                  <Link href="/workspace">
-                    <Search />
-                    <span>Nova Busca</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={pathname.startsWith('/workspace/history')}>
-                  <Link href="/workspace/history">
-                    <History />
-                    <span>Minhas Buscas</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Sistema</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={pathname.startsWith('/workspace/settings')}>
-                  <Link href="/workspace/settings">
-                    <Settings />
-                    <span>Configurações</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  onClick={toggleTheme}
-                  tooltip={resolvedTheme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+    <>
+      <Sidebar
+        variant="sidebar"
+        collapsible="icon"
+        className="border-sidebar-border overflow-hidden border-r"
+        style={{ '--sidebar-width-icon': SIDEBAR_ICON_WIDTH } as React.CSSProperties}
+      >
+        {/* ── Header ── */}
+        <SidebarHeader className="border-sidebar-border/60 h-14 items-center justify-between border-b px-3">
+          <div className="flex h-full w-full items-center gap-2.5 group-data-[collapsible=icon]:justify-center">
+            <Link href="/workspace" className="flex shrink-0 items-center gap-2">
+              <div className="bg-primary flex size-7 shrink-0 items-center justify-center rounded-lg transition-opacity hover:opacity-90">
+                <BookOpenText size={14} className="text-primary-foreground" />
+              </div>
+            </Link>
+            <div className="flex min-w-0 flex-1 flex-col leading-none group-data-[collapsible=icon]:hidden">
+              <span className="text-sidebar-foreground truncate text-[13px] font-semibold tracking-tight">
+                SOL O.L.A
+              </span>
+              <span className="text-sidebar-foreground/35 font-mono text-[8px] tracking-[0.15em] uppercase">
+                SCBC · 2026
+              </span>
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={toggleSidebar}
+                  className="text-sidebar-foreground/40 hover:bg-sidebar-accent hover:text-sidebar-foreground ml-auto flex size-7 shrink-0 items-center justify-center rounded transition-colors group-data-[collapsible=icon]:hidden"
+                  aria-label="Colapsar menu"
                 >
-                  {resolvedTheme === 'dark' ? (
-                    <Sun className="text-[oklch(0.72_0.16_72)]" />
-                  ) : (
-                    <Moon className="text-primary/60" />
-                  )}
-                  <span>{resolvedTheme === 'dark' ? 'Modo Claro' : 'Modo Escuro'}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
+                  <PanelLeftClose size={16} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>
+                Colapsar menu
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </SidebarHeader>
 
-      <SidebarFooter className="border-border/50 border-t p-3">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              size="lg"
-              asChild
-              isActive={pathname.startsWith('/workspace/profile')}
-              className="h-12 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-            >
-              <Link href="/workspace/profile">
-                {session?.user?.image ? (
-                  <img
-                    src={session.user.image}
-                    alt={session.user.name || 'User Avatar'}
-                    referrerPolicy="no-referrer"
-                    className="border-border size-8 rounded-full border shadow-sm"
-                  />
+        {/* ── Content ── */}
+        <SidebarContent className="gap-0 overflow-x-hidden px-2 py-2 group-data-[collapsible=icon]:px-0">
+          {/* ── Zona primária: ação + nav principal ─────────────────────────
+              Fundo levemente elevado para criar hierarquia visual clara.
+              No modo colapsado (icon only) remove o padding lateral. */}
+          <div className="bg-sidebar-accent/20 mb-1.5 rounded-lg p-1.5 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:px-0">
+            {/* CTA — Nova Sessão */}
+            <div className="pb-1 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:pb-2">
+              {/* open={undefined} quando collapsed = Radix gerencia; open={false} quando expanded = nunca mostra */}
+              <Tooltip open={state === 'collapsed' ? undefined : false}>
+                <TooltipTrigger asChild>
+                  <Link
+                    href="/workspace"
+                    className={cn(
+                      'flex h-8 w-full items-center justify-center gap-2 rounded-md',
+                      'bg-background/70 border-border/50 text-sidebar-foreground/70 border text-[13px] font-medium',
+                      'hover:bg-background hover:border-border hover:text-sidebar-foreground transition-colors duration-100',
+                      'group-data-[collapsible=icon]:border-border/60 group-data-[collapsible=icon]:bg-background group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:border group-data-[collapsible=icon]:px-0'
+                    )}
+                  >
+                    <Plus size={14} className="text-sidebar-foreground/50 shrink-0" />
+                    <span className="group-data-[collapsible=icon]:hidden">Nova Sessão</span>
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>
+                  Nova Sessão
+                </TooltipContent>
+              </Tooltip>
+            </div>
+
+            {/* Nav principal */}
+            <SidebarGroup className="p-0">
+              <SidebarGroupContent>
+                <SidebarMenu className="gap-0.5">
+                  {NAV_ROUTES.map((route) => (
+                    <NavItem
+                      key={route.href}
+                      href={route.href}
+                      icon={route.icon}
+                      label={route.label}
+                      active={isActive(pathname, route.href, route.exact)}
+                    />
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </div>
+          {/* ── Fim zona primária ──────────────────────────────────────── */}
+
+          {/* ── Zona secundária: histórico de sessões recentes ────────────
+              Sem fundo especial — fica visivelmente mais leve que a zona
+              primária, criando hierarquia por contraste. */}
+          <SidebarGroup className="p-0 group-data-[collapsible=icon]:hidden">
+            <SidebarGroupLabel className="text-sidebar-foreground/30 px-1.5 pt-1 pb-1 text-[9.5px] font-semibold tracking-[0.12em] uppercase">
+              Recentes
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu className="gap-0">
+                {isLoading ? (
+                  <RecentChatsSkeleton />
+                ) : chats.length > 0 ? (
+                  chats.map((chat) => (
+                    <RecentChatItem
+                      key={chat.id}
+                      chat={chat}
+                      active={isActive(pathname, `/workspace/chat/${chat.id}`)}
+                      onShare={() => setShareDialogChatId(chat.id)}
+                      onRename={(title) => rename(chat.id, title)}
+                      onDelete={() => handleDelete(chat.id)}
+                    />
+                  ))
                 ) : (
-                  <UserCircle className="text-muted-foreground size-8" />
+                  <p className="text-sidebar-foreground/25 px-2 py-2 text-[11px]">
+                    Nenhuma sessão recente
+                  </p>
                 )}
-                <div className="flex min-w-0 flex-col gap-0.5 leading-none">
-                  <span className="text-foreground max-w-35 truncate font-medium">
-                    {session?.user?.name || 'Pesquisador'}
-                  </span>
-                  <span className="text-muted-foreground max-w-35 truncate text-xs">
-                    {session?.user?.email || 'Ver perfil'}
-                  </span>
-                </div>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-        {/* Badge de versão — detalhe de produto profissional */}
-        <div className="mt-1 flex items-center justify-between px-2 pb-1 group-data-[collapsible=icon]:hidden">
-          <span className="text-muted-foreground/40 font-mono text-[9px] tracking-wider">
-            v0.9-beta
-          </span>
-          <span className="text-muted-foreground/40 font-mono text-[9px] tracking-wider">
-            SCBC · 2026
-          </span>
-        </div>
-      </SidebarFooter>
-    </Sidebar>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          {/* ── Fim zona secundária ──────────────────────────────────── */}
+        </SidebarContent>
+
+        {/* ── Footer ── */}
+        <SidebarFooter className="border-sidebar-border/60 border-t p-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0">
+          <UserMenuPopover />
+        </SidebarFooter>
+      </Sidebar>
+
+      {state === 'collapsed' && <SidebarExpandButton onExpand={toggleSidebar} />}
+
+      {shareDialogChatId && (
+        <ShareDialog
+          chatId={shareDialogChatId}
+          open
+          onOpenChange={(o) => {
+            if (!o) setShareDialogChatId(null);
+          }}
+        />
+      )}
+    </>
   );
 }

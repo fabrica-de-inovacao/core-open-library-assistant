@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -13,16 +14,19 @@ import { Input } from '@/components/ui/input';
 import { Share2, Check, Copy, ExternalLink } from 'lucide-react';
 
 interface ShareDialogProps {
-  queryId: string;
+  chatId: string;
+  /** Modo controlado: controla abertura externamente */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function ShareDialog({ queryId }: ShareDialogProps) {
+export function ShareDialog({ chatId, open, onOpenChange }: ShareDialogProps) {
   const [copied, setCopied] = useState(false);
 
   const shareUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}/share/${queryId}`
-      : `/share/${queryId}`;
+      ? `${window.location.origin}/share/chat/${chatId}`
+      : `/share/chat/${chatId}`;
 
   const handleCopy = async () => {
     try {
@@ -42,22 +46,33 @@ export function ShareDialog({ queryId }: ShareDialogProps) {
     }
   };
 
+  // Modo controlado vs. modo com trigger interno
+  const isControlled = open !== undefined;
+
   return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
-          <Share2 className="size-3.5" />
-          Compartilhar
-        </Button>
-      </DialogTrigger>
+    <Dialog
+      open={isControlled ? open : undefined}
+      onOpenChange={isControlled ? onOpenChange : undefined}
+    >
+      {!isControlled && (
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+            <Share2 className="size-3.5" />
+            Compartilhar
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-base">Compartilhar Revisão</DialogTitle>
+          <DialogTitle className="text-base">Compartilhar Sessão</DialogTitle>
+          <DialogDescription className="sr-only">
+            Copie o link para compartilhar toda a sessão de pesquisa com outras pessoas.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-1">
           <p className="text-muted-foreground text-sm">
-            Qualquer pessoa com este link pode visualizar os artigos e TL;DRs desta pesquisa —{' '}
-            <strong>sem precisar fazer login</strong>.
+            Qualquer pessoa com este link pode visualizar <strong>todas as buscas e artigos</strong>{' '}
+            desta sessão — <strong>sem precisar fazer login</strong>.
           </p>
 
           <div className="flex gap-2">

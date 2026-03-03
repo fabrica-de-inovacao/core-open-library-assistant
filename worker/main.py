@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Header, Body
+from fastapi import FastAPI, Depends, HTTPException, Header, Body, File, UploadFile
 from pydantic import BaseModel
 import httpx
 from bs4 import BeautifulSoup
@@ -31,17 +31,31 @@ def verify_token(x_worker_token: str = Header(...)):
 # Auto-detecção de GPU via ONNX Runtime
 # onnxruntime-gpu usa CUDAExecutionProvider quando disponível e cai para CPU
 # automaticamente — sem necessidade de configuração manual.
+# Verificação real: executa nvidia-smi para confirmar driver NVIDIA present antes
+# de ativar CUDA (evita falso-positivo em GPUs AMD/integradas).
 # ---------------------------------------------------------------------------
 def _detect_and_log_device() -> list[str]:
     try:
         import onnxruntime as ort
+        import subprocess
         available = ort.get_available_providers()
         if "CUDAExecutionProvider" in available:
-            logger.info("[DEVICE] GPU detectada — ONNX usará CUDAExecutionProvider (CUDA)")
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        else:
-            logger.info("[DEVICE] GPU não disponível — ONNX usará CPUExecutionProvider")
-            return ["CPUExecutionProvider"]
+            # Confirma driver NVIDIA real antes de usar CUDA
+            try:
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                    capture_output=True, timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    gpu_name = result.stdout.decode().strip().splitlines()[0]
+                    logger.info(f"[DEVICE] GPU NVIDIA detectada ({gpu_name}) — ONNX usará CUDAExecutionProvider")
+                    return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                else:
+                    logger.info("[DEVICE] CUDAExecutionProvider disponível mas nvidia-smi falhou — usando CPU")
+            except Exception:
+                logger.info("[DEVICE] nvidia-smi não encontrado — usando CPUExecutionProvider")
+        logger.info("[DEVICE] GPU NVIDIA não disponível — ONNX usará CPUExecutionProvider")
+        return ["CPUExecutionProvider"]
     except ImportError:
         logger.warning("[DEVICE] onnxruntime não encontrado — sem suporte a modelos ONNX")
         return ["CPUExecutionProvider"]
@@ -174,3 +188,38 @@ async def extract_pdf(request: ExtractRequest):
             "content_markdown": abstract_text,
             "char_count": len(abstract_text)
         }
+
+# ---------------------------------------------------------------------------
+# POST /extract-upload — extrai PDF enviado diretamente como multipart/form-data
+# (artigos do próprio usuário; não precisa de URL)
+# ---------------------------------------------------------------------------
+@app.post("/extract-upload", dependencies=[Depends(verify_token)])
+async def extract_upload(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    pdf_bytes = await file.read()
+    if len(pdf_bytes) < 100:
+        raise HTTPException(status_code=400, detail="PDF file is empty or too small")
+
+    method_used = "pymupdf"
+    try:
+        text = extract_with_pymupdf(pdf_bytes)
+        if len(text.strip()) < 200:
+            text = extract_with_ocr(pdf_bytes)
+            method_used = "tesseract_ocr"
+    except Exception as e:
+        logger.warning(f"/extract-upload PyMuPDF failed ({e}), trying OCR")
+        try:
+            text = extract_with_ocr(pdf_bytes)
+            method_used = "tesseract_ocr"
+        except Exception as e2:
+            logger.error(f"/extract-upload OCR also failed: {e2}")
+            raise HTTPException(status_code=422, detail="Could not extract text from PDF")
+
+    return {
+        "success": True,
+        "method_used": method_used,
+        "content_markdown": text,
+        "char_count": len(text),
+    }

@@ -15,7 +15,7 @@ async function main() {
     // Sometimes it's created as an index depending on the drizzle version
     try {
       await db.execute(sql`DROP INDEX IF EXISTS "articles_doi_unique";`);
-    } catch (e) {
+    } catch {
       console.log('Index drop ignored if not exists.');
     }
 

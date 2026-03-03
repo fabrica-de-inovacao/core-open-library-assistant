@@ -26,6 +26,7 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
       'Gera a revisão sistemática consolidada dos artigos já processados na pesquisa. CHAME ESTA FERRAMENTA imediatamente quando o usuário (ou o sistema) solicitar a síntese ou o resumo geral dos artigos encontrados.',
     // P-04 (Fase 1): removido query_id do inputSchema — a tool usa o chatId da closure.
     inputSchema: z.object({}),
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     execute: async (_input) => {
       logger.info('[Tool] generate_systematic_review | chatId:', ctx.chatId);
 
@@ -67,18 +68,18 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
         };
       }
 
-      const topicQuery = ctx.chatId
+      // Busca todas as queries do chat e escolhe a primeira com originalQuery preenchido
+      // (evita pegar uma query SOL com 0 resultados que pode ter originalQuery null)
+      const topicRows = ctx.chatId
         ? await db
             .select({ originalQuery: searchQueries.originalQuery })
             .from(searchQueries)
             .where(eq(searchQueries.chatId, ctx.chatId))
-            .limit(1)
         : await db
             .select({ originalQuery: searchQueries.originalQuery })
             .from(searchQueries)
-            .where(eq(searchQueries.id, ctx.queryId ?? ''))
-            .limit(1);
-      const topic = topicQuery[0]?.originalQuery ?? '';
+            .where(eq(searchQueries.id, ctx.queryId ?? ''));
+      const topic = topicRows.find((q) => q.originalQuery)?.originalQuery ?? '';
 
       // ✅ I-04: ranking composto (citações + recência)
       const initialRanked = rankArticles(readyArticles);
@@ -122,7 +123,7 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
         return {
           success: true,
           total_articles: topK.length,
-          synthesis_instructions: `Gere a revisão sistemática em Markdown iniciando com "# 📚 TL;DR Geral".\n\nCITAÇÕES:\n${citationMap}\n\nARTIGOS:\n${articlesContent}`,
+          synthesis_instructions: `Gere a revisão sistemática em Markdown seguindo a estrutura canônica SOL:\n\n1ª linha: # 📚 TL;DR Geral\nSeções em ##: Visão Geral e Contexto | Estratégias e Iniciativas Detalhadas (com ### subseções por tema) | Tabela Comparativa dos Artigos | Padrões, Divergências, Gaps e Oportunidades de Pesquisa (com ### Padrões Identificados, Divergências e Desafios, Gaps de Pesquisa, Oportunidades de Pesquisa).\nEncerre com parágrafo SEM heading convidando o usuário a aprofundar.\n\nCITAÇÕES:\n${citationMap}\n\nARTIGOS:\n${articlesContent}`,
         };
       }
     },

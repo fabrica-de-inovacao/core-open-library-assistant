@@ -1,6 +1,6 @@
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
-import { eq, ne } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { notFound } from 'next/navigation';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';

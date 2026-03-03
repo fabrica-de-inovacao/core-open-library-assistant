@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import * as cheerio from 'cheerio';
-import { eq, inArray, and } from 'drizzle-orm';
+import { eq, inArray, and, sql } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
 import { auth } from '@/auth';
@@ -254,8 +254,16 @@ export async function GET(request: Request) {
       }
     }
 
-    // Cap at 25 results
-    const limitedResults = allResults.slice(0, 25);
+    // Cap at user-defined limit (default 25, allowed: 10 | 25)
+    const rawLimit = Number(searchParams.get('limit') ?? '25');
+    const articleLimit = [10, 25].includes(rawLimit) ? rawLimit : 25;
+    // Idioma para geração de TL;DRs (passado pelo cliente via useUserSettings)
+    const tldrLang = searchParams.get('tldr_lang') ?? 'pt-BR';
+
+    const limitedResults = allResults.slice(0, articleLimit);
+    console.log(
+      `[Search] \uD83D\uDCCA Limite de artigos: ${articleLimit} | Idioma TL;DR: ${tldrLang} | Total: ${limitedResults.length}`
+    );
 
     // 3. Insert into Database with DOI deduplication
     console.log(`[Search] 📊 Total após scraping: ${limitedResults.length} artigos`);
@@ -319,7 +327,8 @@ export async function GET(request: Request) {
         `[Search] ♻️ ${toInsertCached.length} artigos em cache (DOI match) | ${toInsertFresh.length} artigos novos para extração`
       );
 
-      // Insert cached articles directly (already processed — no Inngest needed)
+      // P-10: onConflictDoUpdate atualiza metadata enriquecida caso o artigo já exista
+      // na mesma query (busca re-executada ou duplicata via URL).
       if (toInsertCached.length > 0) {
         const cachedRows = toInsertCached.map((src) => ({
           queryId: queryId as string,
@@ -339,7 +348,24 @@ export async function GET(request: Request) {
           isOpenAccess: src.isOpenAccess ?? undefined,
           metadataSource: src.metadataSource ?? undefined,
         }));
-        await db.insert(articles).values(cachedRows).onConflictDoNothing();
+        await db
+          .insert(articles)
+          .values(cachedRows)
+          .onConflictDoUpdate({
+            target: [articles.queryId, articles.originalUrl],
+            set: {
+              status: sql`excluded.status`,
+              tldrContent: sql`excluded.tldr_content`,
+              markdownContent: sql`excluded.markdown_content`,
+              abstract: sql`excluded.abstract`,
+              keywords: sql`excluded.keywords`,
+              citationCount: sql`excluded.citation_count`,
+              publisher: sql`excluded.publisher`,
+              isOpenAccess: sql`excluded.is_open_access`,
+              metadataSource: sql`excluded.metadata_source`,
+              updatedAt: sql`now()`,
+            },
+          });
         console.log(`[Search] ✅ ${cachedRows.length} artigos em cache inseridos sem re-extração`);
       }
 
@@ -375,6 +401,36 @@ export async function GET(request: Request) {
       console.warn(`[Search] ⚠️ Nenhum artigo encontrado — DB insert ignorado`);
     }
 
+    // Pré-verificação de quantidade mínima:
+    // Se a busca retornou menos de 5 artigos no total (incluindo cached), não há material
+    // suficiente para uma revisão sistemática significativa. Evita desperdiçar processamento
+    // (TL;DR, embeddings, PDF extraction) em resultados claramente insuficientes.
+    const MIN_USEFUL_ARTICLES = 5;
+    if (limitedResults.length > 0 && limitedResults.length < MIN_USEFUL_ARTICLES) {
+      // Marca os artigos pending como failed para evitar loading infinito na UI.
+      // O Inngest não será acionado — sem este update os artigos ficariam presos em 'pending'.
+      await db
+        .update(articles)
+        .set({ status: 'failed' })
+        .where(and(eq(articles.queryId, queryId as string), eq(articles.status, 'pending')));
+      await db
+        .update(searchQueries)
+        .set({ status: 'needs_refinement' })
+        .where(eq(searchQueries.id, queryId));
+      console.log(
+        `[Search] ⚠️ Poucos resultados (${limitedResults.length} < ${MIN_USEFUL_ARTICLES}) — needs_refinement, artigos marcados como failed, Inngest não acionado`
+      );
+      return NextResponse.json({
+        success: true,
+        query: combinedQuery,
+        total_found: limitedResults.length,
+        results: limitedResults,
+        query_id: queryId,
+        needs_refinement: true,
+        reason: 'low_count',
+      });
+    }
+
     // Update query status to processing (wait for queue to pick it up later)
     await db
       .update(searchQueries)
@@ -392,6 +448,7 @@ export async function GET(request: Request) {
           data: {
             query_id: queryId,
             article_ids: batch,
+            tldr_lang: tldrLang,
           },
         });
       }

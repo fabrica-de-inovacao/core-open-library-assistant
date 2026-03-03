@@ -84,11 +84,17 @@ export function recencyScore(publicationYear: number | null): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Deserializa o embedding armazenado como JSON string no banco.
- * Retorna undefined se o campo for nulo ou inválido.
+ * Obtém o embedding do abstract de um artigo.
+ * P-19: abstractEmbedding é agora vector(768) — retornado como number[] pelo drizzle-orm.
+ * Mantém suporte a string JSON para retrocompatibilidade com dados antigos.
  */
-export function parseStoredEmbedding(stored: string | null | undefined): number[] | undefined {
+export function parseStoredEmbedding(
+  stored: number[] | string | null | undefined
+): number[] | undefined {
   if (!stored) return undefined;
+  // Caminho pós-migração: drizzle retorna number[] diretamente
+  if (Array.isArray(stored)) return stored.length > 0 ? stored : undefined;
+  // Retrocompat: campo ainda em formato JSON TEXT
   try {
     const parsed = JSON.parse(stored);
     if (Array.isArray(parsed) && parsed.length > 0) return parsed as number[];

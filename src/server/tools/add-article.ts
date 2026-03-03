@@ -18,6 +18,7 @@ const doiSchema = z.object({
   query_id: z.string().describe('query_id ativo atual para vincular o artigo recherché'),
 });
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function buildAddArticleByDoiTool(_ctx: ToolContext) {
   return tool({
     description:

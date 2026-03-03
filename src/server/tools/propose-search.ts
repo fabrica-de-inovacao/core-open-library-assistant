@@ -14,14 +14,14 @@ import { logger } from '@/lib/logger';
 const searchSchema = z.object({
   topic: z
     .string()
-    .optional()
     .describe(
-      'Tópico central da pesquisa em linguagem natural (ex: "gamificação no ensino superior"). Usado para otimizar as queries via agente de estratégia.'
+      'Tópico central da pesquisa em linguagem natural (ex: "gamificação no ensino superior"). O agente de estratégia gerará as strings de busca automaticamente a partir deste tópico.'
     ),
   queries: z
     .array(z.string())
+    .default([])
     .describe(
-      'Lista de strings de busca booleanas otimizadas separadas por idioma (ex: ["(\\"inteligência artificial\\") AND (educação)", "(\\"artificial intelligence\\") AND (education)"])'
+      'Deixe SEMPRE como array vazio []. As queries são geradas automaticamente pelo agente de estratégia a partir do topic.'
     ),
 });
 
@@ -34,7 +34,7 @@ export interface ToolContext {
 export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
   return tool({
     description:
-      'Ferramenta para propor uma pesquisa bibliográfica ou mapeamento sistemático na SBC OpenLib. Passe as strings de busca pelo parâmetro "queries" desta ferramenta para renderizar a interface gráfica para o usuário.',
+      'Ferramenta para propor uma pesquisa bibliográfica na SBC OpenLib. Passe APENAS o `topic` em linguagem natural e `queries: []` — o agente de estratégia gera as strings de busca booleanas automaticamente. NÃO gere queries manualmente.',
     inputSchema: searchSchema,
     execute: async (input: z.infer<typeof searchSchema>) => {
       const { queries: rawQueries, topic } = input;
@@ -44,18 +44,20 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
       logger.debug('[Tool] queries brutas:', rawQueries);
 
       try {
-        // ✅ I-04: strategy-agent refina as queries antes de salvar
+        // I-04: strategy-agent gera todas as queries a partir do topic
         let finalQueries = rawQueries;
         if (topic) {
           try {
             const strategy = await runStrategyAgent(topic, rawQueries);
             finalQueries = strategy.queries;
             logger.info(
-              `[Tool] StrategyAgent: ${rawQueries.length} → ${finalQueries.length} queries`
+              `[Tool] StrategyAgent: geradas ${finalQueries.length} queries para tópico "${topic.slice(0, 60)}"`
             );
-            logger.debug('[Tool] queries refinadas:', finalQueries);
+            logger.debug('[Tool] queries geradas:', finalQueries);
           } catch (err) {
-            logger.warn('[Tool] StrategyAgent falhou, usando queries originais:', err);
+            logger.warn('[Tool] StrategyAgent falhou:', err);
+            // Se não havia queries de fallback, propaga o erro
+            if (rawQueries.length === 0) throw err;
           }
         }
 
@@ -99,12 +101,16 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
 export function buildProposeSearchGlobalDatabaseTool(ctx: ToolContext) {
   return tool({
     description:
-      'Propõe uma busca na base científica global OpenAlex (ACM, IEEE) usando uma string simples em inglês. O usuário irá revisar o card de proposta e clicar em Executar no Front-end.',
+      'Propõe uma busca na base científica global OpenAlex. Regras críticas para a query: ' +
+      '(1) Termos genéricos SEMPRE em inglês. ' +
+      '(2) Nomes próprios em Português (ex: "Mermãs Digitais", "ProInfo") NÃO aparecem na literatura internacional — NUNCA os use como termo AND mandatório. Em vez disso, use os CONCEITOS que o projeto representa (ex: "digital inclusion" AND "women" AND education). ' +
+      '(3) Se o usuário citou um projeto/programa, extraia os conceitos centrais e busque por eles. ' +
+      '(4) Prefira queries simples e conceituais a queries booleanas complexas.',
     inputSchema: z.object({
       query: z
         .string()
         .describe(
-          'Termos de busca limpos em inglês. Ex: "software engineering gamification education"'
+          'String de busca em inglês com conceitos gerais. NÃO use nomes próprios em Português como AND mandatório (eles não aparecem no OpenAlex). Ex correto: "digital inclusion women education computing" ou "(\"digital literacy\" OR \"digital inclusion\") AND women AND education". Ex errado: "\"Mermãs Digitais\" AND education"'
         ),
     }),
     execute: async (input) => {
@@ -115,6 +121,7 @@ export function buildProposeSearchGlobalDatabaseTool(ctx: ToolContext) {
         .insert(searchQueries)
         .values({
           originalQuery: query,
+          expandedQuery: 'source:openalex', // flag para pular RelevanceGate no Inngest
           status: 'proposed',
           userId: ctx.sessionUserId,
           chatId: ctx.chatId,

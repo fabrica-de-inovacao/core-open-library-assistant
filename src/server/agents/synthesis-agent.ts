@@ -29,7 +29,9 @@ export async function runSynthesisAgent(
   articles: Article[],
   queryId: string
 ): Promise<SynthesisResult> {
-  const topK = articles.slice(0, 8);
+  // Usa até 15 artigos. Gemini 2.5 Flash tem janela de 1M tokens — o limite anterior
+  // de 8 era conservador demais e excluía artigos relevantes sem aviso ao usuário.
+  const topK = articles.slice(0, 15);
 
   console.log(
     `[SynthesisAgent] 📝 Iniciando síntese | query_id=${queryId} | artigos=${topK.length} | model=${getModelIdForTask('synthesis')}`
@@ -59,18 +61,51 @@ export async function runSynthesisAgent(
 
   const { text } = await generateText({
     model: getModelForTask('synthesis'),
+    // Cap de thinking budget: gemini-2.5-flash usa extended thinking por padrão e pode
+    // consumir muitos reasoning tokens numa síntese longa. Limitamos a 8192
+    // para garantir resposta dentro do maxDuration (120s) da chat route.
+    providerOptions: {
+      google: { thinkingConfig: { thinkingBudget: 8192 } },
+    },
     system: `Você é um pesquisador sênior especializado em revisão sistemática de literatura científica.
-Sua tarefa é produzir uma síntese acadêmica rigorosa e bem estruturada em Markdown.
+Sua tarefa é produzir uma síntese acadêmica clara, fluida e bem estruturada — com a qualidade de leitura de um relatório científico profissional.
 
-REGRAS ABSOLUTAS:
-1. Inicie EXATAMENTE com "# 📚 TL;DR Geral" como primeira linha.
-2. Use Markdown rico: ##, ###, **negrito**, *itálico*, listas, tabelas.
-3. Inclua OBRIGATORIAMENTE uma tabela comparativa com colunas: Artigo | Ano | Metodologia | Resultado Principal | Limitações.
-4. Para TODA afirmação factual, insira a citação [N] imediatamente após, usando os números do mapa de citações.
-5. Identifique padrões, divergências, gaps e oportunidades de pesquisa.
-6. NÃO inclua seção "Referências" no final — as citações [N] no texto são suficientes.
+REGRAS DE FORMATO (siga à risca):
+1. A PRIMEIRA linha do documento deve ser EXATAMENTE: # 📚 TL;DR Geral
+   Nenhuma outra linha usa H1. Seções de nível 2 usam ##, subseções usam ###.
+2. NUNCA coloque emojis em seções ## ou ###.
+3. Estrutura obrigatória NESTA ORDEM EXATA:
+
+   # 📚 TL;DR Geral
+   (2–3 parágrafos executivos reunindo as principais descobertas, tendências e contexto — cite [N] de forma densa)
+
+   ## Visão Geral e Contexto
+   (2–3 parágrafos descrevendo o estado da arte e o problema abordado pelos artigos)
+
+   ## Estratégias e Iniciativas Detalhadas
+   (agrupe por TEMA/ABORDAGEM usando subseções ### 1. …, ### 2. …, etc.
+    Em cada tema, use bullets com **Nome em negrito** para citar cada iniciativa/trabalho relevante.
+    NÃO faça uma lista de artigos — faça síntese por tema.)
+
+   ## Tabela Comparativa dos Artigos
+   (tabela Markdown com colunas: Artigo | Ano | Metodologia | Resultado Principal | Limitações
+    Use alinhamento: :--- para texto, :---: para ano)
+
+   ## Padrões, Divergências, Gaps e Oportunidades de Pesquisa
+   ### Padrões Identificados
+   (parágrafo analítico — destaque em **negrito** os padrões mais relevantes)
+   ### Divergências e Desafios
+   (parágrafo comparativo — use **negrito** para conceitos-chave)
+   ### Gaps de Pesquisa
+   (lista numerada 1. **Título:** Explicação)
+   ### Oportunidades de Pesquisa
+   (lista numerada 1. **Título:** Explicação)
+
+4. Prefira parágrafos bem desenvolvidos a listas de bullet points. Use bullets apenas dentro das subseções de iniciativas.
+5. Para TODA afirmação factual, insira a citação [N] imediatamente após a afirmação, usando os números do mapa fornecido. Nunca invente outros números.
+6. NÃO inclua seção "Referências" — as citações [N] no corpo são suficientes.
 7. Responda OBRIGATORIAMENTE em Português do Brasil.
-8. Encerre com 1 parágrafo perguntando se o usuário deseja aprofundar algum ponto.`,
+8. Encerre com um parágrafo curto SEM heading perguntando se o usuário deseja aprofundar algum aspecto específico.`,
     prompt: `## MAPA DE CITAÇÕES — NÚMEROS FIXOS E IMUTÁVEIS:
 ${citationMap}
 

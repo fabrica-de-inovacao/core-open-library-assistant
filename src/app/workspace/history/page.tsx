@@ -8,6 +8,8 @@ import {
   Loader2,
   XCircle,
   FileText,
+  ChevronDown,
+  Download,
 } from 'lucide-react';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
@@ -34,6 +36,9 @@ interface HistoryRow {
   // Fase 1 (P-01): chatId para navegar à sessão completa
   chatId: string | null;
 }
+
+// P-20: número de sessões por página
+const PAGE_SIZE = 20;
 
 // ---------------------------------------------------------------------------
 // Status helpers
@@ -101,20 +106,34 @@ function formatDate(date: Date): string {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchHistory(userId: string): Promise<HistoryRow[]> {
+async function fetchHistory(
+  userId: string,
+  cursor?: string
+): Promise<{ rows: HistoryRow[]; hasMore: boolean; nextCursor: string | null }> {
+  // P-20: cursor-based pagination — busca PAGE_SIZE+1 para detectar página seguinte
+  const cursorDate = cursor ? new Date(cursor) : null;
+
   // Fase 1 (P-01, P-16): busca chat_sessions do usuário, com contagem de artigos acumulada
-  const sessionRows = await db
+  const sessionQuery = db
     .select({
       id: chatSessions.id,
       title: chatSessions.title,
       createdAt: chatSessions.createdAt,
     })
     .from(chatSessions)
-    .where(eq(chatSessions.userId, userId))
+    .where(
+      cursorDate
+        ? sql`${chatSessions.userId} = ${userId} AND ${chatSessions.createdAt} < ${cursorDate}`
+        : eq(chatSessions.userId, userId)
+    )
     .orderBy(desc(chatSessions.createdAt))
-    .limit(50);
+    .limit(PAGE_SIZE + 1); // +1 para detectar se há mais
 
-  if (sessionRows.length === 0) {
+  const sessionRows = await sessionQuery;
+  const hasMore = sessionRows.length > PAGE_SIZE;
+  const pageRows = hasMore ? sessionRows.slice(0, PAGE_SIZE) : sessionRows;
+
+  if (pageRows.length === 0 && !cursor) {
     // Retrocompat: mostra queries antigas sem chatId (criadas antes da Fase 1)
     const articleCounts = db
       .select({
@@ -139,19 +158,23 @@ async function fetchHistory(userId: string): Promise<HistoryRow[]> {
       .orderBy(desc(searchQueries.createdAt))
       .limit(50);
 
-    return legacyRows.map((r) => ({
-      id: r.id,
-      displayTitle: r.originalQuery,
-      status: r.status,
-      createdAt: r.createdAt,
-      articleCount: Number(r.articleCount),
-      chatId: null,
-    }));
+    return {
+      rows: legacyRows.map((r) => ({
+        id: r.id,
+        displayTitle: r.originalQuery,
+        status: r.status,
+        createdAt: r.createdAt,
+        articleCount: Number(r.articleCount),
+        chatId: null,
+      })),
+      hasMore: false,
+      nextCursor: null,
+    };
   }
 
   // Para cada sessão, busca o status mais recente e contagem de artigos
   const results: HistoryRow[] = await Promise.all(
-    sessionRows.map(async (sess) => {
+    pageRows.map(async (sess) => {
       // Busca a última query da sessão para obter título fallback e status
       const [latestQuery] = await db
         .select({
@@ -181,20 +204,30 @@ async function fetchHistory(userId: string): Promise<HistoryRow[]> {
     })
   );
 
-  return results;
+  const nextCursor =
+    hasMore && pageRows.length > 0 ? pageRows[pageRows.length - 1]!.createdAt.toISOString() : null;
+
+  return { rows: results, hasMore, nextCursor };
 }
 
 // ---------------------------------------------------------------------------
 // Page Component
 // ---------------------------------------------------------------------------
 
-export default async function HistoryPage() {
+export default async function HistoryPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ cursor?: string }>;
+}) {
   const session = await auth();
   if (!session?.user?.id) {
     redirect('/login');
   }
 
-  const history = await fetchHistory(session.user.id);
+  const params = await searchParams;
+  const cursor = params?.cursor;
+  const { rows: history, hasMore, nextCursor } = await fetchHistory(session.user.id, cursor);
+  const isFirstPage = !cursor;
 
   return (
     <div className="bg-background text-foreground flex h-screen flex-col font-sans">
@@ -213,12 +246,13 @@ export default async function HistoryPage() {
         <span className="text-muted-foreground text-xs">
           {history.length} sessão{history.length !== 1 ? 'ões' : ''} encontrada
           {history.length !== 1 ? 's' : ''}
+          {!isFirstPage ? ' (página seguinte)' : ''}
         </span>
       </header>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
-        {history.length === 0 ? (
+        {history.length === 0 && isFirstPage ? (
           /* Empty state */
           <div className="flex h-full items-center justify-center">
             <div className="w-full max-w-md text-center">
@@ -266,20 +300,53 @@ export default async function HistoryPage() {
                   </span>
                 </div>
 
-                {/* Right: open button - Fase 1: navega para /workspace/chat/[chatId] */}
-                {(row.status === 'done' || row.status === 'processing' || row.articleCount > 0) && (
-                  <Link
-                    href={
-                      row.chatId ? `/workspace/chat/${row.chatId}` : `/workspace?query_id=${row.id}`
-                    }
-                    className="border-border bg-background hover:bg-accent hover:text-accent-foreground flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    Abrir
-                  </Link>
-                )}
+                {/* P-21: Botões de ação — Exportar BibTeX + Abrir */}
+                <div className="flex shrink-0 items-center gap-2">
+                  {/* P-21: Botão de exportação BibTeX para sessões com artigos */}
+                  {row.chatId && row.articleCount > 0 && (
+                    <a
+                      href={`/api/export?chat_id=${row.chatId}&format=bibtex`}
+                      download
+                      className="border-border bg-background hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
+                      title="Exportar referências em BibTeX"
+                    >
+                      <Download className="h-3 w-3" />
+                      BibTeX
+                    </a>
+                  )}
+
+                  {/* Botão Abrir */}
+                  {(row.status === 'done' ||
+                    row.status === 'processing' ||
+                    row.articleCount > 0) && (
+                    <Link
+                      href={
+                        row.chatId
+                          ? `/workspace/chat/${row.chatId}`
+                          : `/workspace?query_id=${row.id}`
+                      }
+                      className="border-border bg-background hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Abrir
+                    </Link>
+                  )}
+                </div>
               </div>
             ))}
+
+            {/* P-20: Cursor pagination — Carregar mais sessões */}
+            {hasMore && nextCursor && (
+              <div className="flex justify-center pt-4 pb-2">
+                <Link
+                  href={`/workspace/history?cursor=${encodeURIComponent(nextCursor)}`}
+                  className="border-border bg-background hover:bg-accent hover:text-accent-foreground flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium transition-colors"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                  Carregar mais sessões
+                </Link>
+              </div>
+            )}
           </div>
         )}
       </div>

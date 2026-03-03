@@ -13,16 +13,13 @@
  * Compatibilidade: todos usam @ai-sdk/provider@3.0.8 + @ai-sdk/provider-utils@4.0.16 (sem conflitos nested).
  */
 
-import { google, createGoogleGenerativeAI } from '@ai-sdk/google';
+import { google } from '@ai-sdk/google';
 import { openai } from '@ai-sdk/openai';
 import type { EmbeddingModel, LanguageModel } from 'ai';
 
-// P-03: @ai-sdk/google usa v1beta por padrão, mas text-embedding-004 exige a API v1 estável.
-// Instância separada só para embeddings — não afeta os modelos de linguagem.
-const googleEmbedding = createGoogleGenerativeAI({
-  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-  baseURL: 'https://generativelanguage.googleapis.com/v1',
-});
+// P-03 FIX: usa o singleton 'google' padrão do pacote para embeddings.
+// createGoogleGenerativeAI com baseURL customizada causava 404 em v1 e v1beta.
+// O singleton 'google' já está corretamente configurado para v1beta.
 
 /** Dimensões do modelo de embedding padrão (text-embedding-004 = 768). */
 export const EMBEDDING_DIMENSIONS = 768;
@@ -50,14 +47,14 @@ const TASK_MODELS: Record<SupportedProvider, Record<AgentTask, string>> = {
   google: {
     orchestrator: 'gemini-2.5-flash',
     synthesis: 'gemini-2.5-flash',
-    strategy: 'gemini-2.5-flash',
+    strategy: 'gemini-1.5-flash', // strings de busca: volume médio, custo menor
     reranker: 'gemini-1.5-flash',
     tldr: 'gemini-1.5-flash', // volume alto, custo menor
   },
   openai: {
     orchestrator: 'gpt-4o',
     synthesis: 'gpt-4o',
-    strategy: 'gpt-4o',
+    strategy: 'gpt-4o-mini',
     reranker: 'gpt-4o-mini',
     tldr: 'gpt-4o-mini',
   },
@@ -124,8 +121,9 @@ export function getEmbeddingModel(): EmbeddingModel {
       return openai.embedding(modelId) as unknown as EmbeddingModel;
     case 'google':
     default:
-      // P-03: usa instância com baseURL v1 para garantir compatibilidade com text-embedding-004
-      return googleEmbedding.textEmbeddingModel(modelId) as unknown as EmbeddingModel;
+      // P-03 FIX: usa o singleton 'google' (export padrão do pacote) — já configurado
+      // corretamente para v1beta. Instância customizada causava 404 em ambas as versões.
+      return google.textEmbeddingModel(modelId) as unknown as EmbeddingModel;
   }
 }
 
@@ -144,4 +142,23 @@ export function getModelIdForTask(task: AgentTask): string {
 /** @deprecated Use getModelIdForTask('orchestrator') */
 export function getLanguageModelId(): string {
   return getModelIdForTask('orchestrator');
+}
+
+/**
+ * P-22: Retorna um LanguageModel para um modelId explícito.
+ * O provider é determinado pela variável LLM_PROVIDER (env).
+ * Usado pelo chat route quando o cliente envia um modelId customizado.
+ *
+ * @example
+ * const model = getModelById('gemini-2.5-pro');
+ */
+export function getModelById(modelId: string): LanguageModel {
+  const provider = (process.env.LLM_PROVIDER ?? 'google').toLowerCase() as SupportedProvider;
+  switch (provider) {
+    case 'openai':
+      return openai(modelId) as unknown as LanguageModel;
+    case 'google':
+    default:
+      return google(modelId) as unknown as LanguageModel;
+  }
 }

@@ -3,7 +3,16 @@
 import { useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Play, CheckCircle2, Loader2, Database, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  Play,
+  CheckCircle2,
+  Loader2,
+  Database,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Check,
+} from 'lucide-react';
 
 interface SearchProposalCardProps {
   title?: string;
@@ -24,6 +33,14 @@ export function SearchProposalCard({
   const [isExecuting, setIsExecuting] = useState(false);
   const [isExecuted, setIsExecuted] = useState(isExecutedInitially);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+
+  const handleCopy = (text: string, idx: number) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx(null), 1500);
+    });
+  };
 
   const handleQueryChange = (idx: number, val: string) => {
     const newQ = [...queries];
@@ -126,8 +143,31 @@ export function SearchProposalCard({
               </Button>
             </div>
             {isExpanded && (
-              <div className="animate-in fade-in slide-in-from-top-2 mt-2 w-full rounded-lg bg-emerald-500/10 p-3 font-mono text-[10px] text-emerald-700/80 sm:text-xs dark:text-emerald-400/80">
-                {queries.join(' ; ')}
+              <div className="animate-in fade-in slide-in-from-top-2 mt-2 w-full space-y-2">
+                {queries.map((q, idx) => (
+                  <div
+                    key={idx}
+                    className="group flex items-start gap-2 rounded-lg bg-emerald-500/10 px-3 py-2"
+                  >
+                    <span className="text-muted-foreground mt-0.5 w-4 shrink-0 text-right font-mono text-[10px] select-none">
+                      {idx + 1}.
+                    </span>
+                    <span className="min-w-0 flex-1 font-mono text-[10px] leading-relaxed break-all text-emerald-700/80 sm:text-[11px] dark:text-emerald-400/80">
+                      {q}
+                    </span>
+                    <button
+                      onClick={() => handleCopy(q, idx)}
+                      title="Copiar string"
+                      className="mt-0.5 shrink-0 rounded p-0.5 text-emerald-600 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-emerald-500/20 dark:text-emerald-400"
+                    >
+                      {copiedIdx === idx ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>

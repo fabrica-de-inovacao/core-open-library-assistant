@@ -50,7 +50,8 @@ REGRAS:
 4. Inclua pelo menos 1 query em português e 1 em inglês.
 5. Não inclua operadores NOT a menos que seja essencial para filtrar ruído conhecido.
 6. As queries devem ser compatíveis com SBC OpenLib e OpenAlex.
-7. Retorne APENAS o JSON. Sem texto extra.`,
+7. NOMES PRÓPRIOS (projetos, programas, siglas, instituições): PRESERVE-OS exatamente como fornecidos entre aspas duplas — NUNCA os traduza. Ex.: "Sereias Digitais", "ProInfo", "ENEM".
+8. Retorne APENAS o JSON. Sem texto extra.`,
     prompt: `Tópico de pesquisa: "${topic}"${rawSection}
 
 Gere as strings de busca booleana otimizadas:`,

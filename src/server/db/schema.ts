@@ -8,7 +8,9 @@ import {
   varchar,
   jsonb,
   boolean,
+  index,
   uniqueIndex,
+  vector,
 } from 'drizzle-orm/pg-core';
 import type { AdapterAccount } from 'next-auth/adapters';
 
@@ -78,24 +80,39 @@ export const chatSessions = pgTable('chat_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
   title: text('title'), // título human-readable (gerado após 1ª mensagem, P-17)
+  // V2: cache da sumarização de histórico longo — evita rechamar LLM a cada request.
+  // Regenerado quando messages.length - conversationSummaryCount >= KEEP_RECENT (14).
+  conversationSummary: text('conversation_summary'),
+  conversationSummaryCount: integer('conversation_summary_count').default(0).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
 // --- Core App Tables ---
 
-export const searchQueries = pgTable('search_queries', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  // Fase 1 (P-01): chatId vincula esta query à sessão de chat mãe.
-  // Nullable para compatibilidade retroativa com queries antigas.
-  chatId: uuid('chat_id').references(() => chatSessions.id, { onDelete: 'set null' }),
-  userId: text('user_id').references(() => users.id),
-  originalQuery: text('original_query').notNull(),
-  expandedQuery: text('expanded_query'),
-  summary: text('summary'), // Saved general TL;DR
-  status: varchar('status', { length: 50 }).notNull(), // 'proposed', 'searching', 'processing', 'done', 'failed', 'proposed'
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+export const searchQueries = pgTable(
+  'search_queries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // Fase 1 (P-01): chatId vincula esta query à sessão de chat mãe.
+    // Nullable para compatibilidade retroativa com queries antigas.
+    chatId: uuid('chat_id').references(() => chatSessions.id, { onDelete: 'set null' }),
+    userId: text('user_id').references(() => users.id),
+    originalQuery: text('original_query').notNull(),
+    expandedQuery: text('expanded_query'),
+    summary: text('summary'), // Saved general TL;DR
+    status: varchar('status', { length: 50 }).notNull(), // 'proposed', 'searching', 'processing', 'done', 'failed'
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    // Fase 8 (P-trending): covering index para a query de trending topics.
+    // WHERE status = 'done' + GROUP BY original_query — index-only scan.
+    statusOriginalQueryIdx: index('search_queries_status_oq_idx').on(
+      table.status,
+      table.originalQuery
+    ),
+  })
+);
 
 export const articles = pgTable(
   'articles',
@@ -120,9 +137,9 @@ export const articles = pgTable(
     publisher: text('publisher'),
     isOpenAccess: boolean('is_open_access'),
     metadataSource: varchar('metadata_source', { length: 50 }).default('scraper'), // 'scraper' | 'crossref' | 'manual'
-    // I-03: embedding do abstract para reranking semântico (Fase 2)
-    // Serializado como JSON array: "[0.123, -0.456, ...]"
-    abstractEmbedding: text('abstract_embedding'),
+    // I-03: P-19 — embedding do abstract para reranking semântico.
+    // Migrado de TEXT para vector(768) em 0005_pgvector_and_url_idx.sql.
+    abstractEmbedding: vector('abstract_embedding', { dimensions: 768 }),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },
@@ -130,6 +147,8 @@ export const articles = pgTable(
     // Ensures the same DOI is only processed once per query
     // But allows the same DOI to exist in different queries
     doiQueryIdx: uniqueIndex('doi_query_idx').on(table.queryId, table.doi),
+    // P-10: garante unicidade por URL por query (artigos sem DOI também são deduplicados)
+    urlQueryIdx: uniqueIndex('url_query_idx').on(table.queryId, table.originalUrl),
   })
 );
 

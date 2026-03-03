@@ -64,15 +64,76 @@ export type RealtimeStatus = 'connecting' | 'connected' | 'disconnected';
  * - Usa chatId para busca inicial (todos os artigos do chat, via search_queries.chat_id)
  * - Usa activeQueryId para subscricao Realtime (artigos da busca corrente)
  * - Quando activeQueryId muda (nova busca), mantem artigos anteriores e adiciona novos
+ * Fase 3 (P-PDF): addQueryId() permite subscrever a queryIds de uploads fora do fluxo chat
  */
-export function useSupabaseRealtime(
-  activeQueryId: string | null,
-  chatId?: string | null
-) {
+export function useSupabaseRealtime(activeQueryId: string | null, chatId?: string | null) {
   const [data, setData] = useState<Article[]>([]);
   // E-04: estado de conexao exposto para a UI exibir badge de aviso
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>('connecting');
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // P-03 FIX: contador de reconexão — ao incrementar, o useEffect re-cria o canal WebSocket
+  const [reconnectTrigger, setReconnectTrigger] = useState(0);
+  // Fase 3 (P-PDF): queryIds extras de uploads (fora do fluxo do chat)
+  const [extraQueryIds, setExtraQueryIds] = useState<Set<string>>(new Set());
+
+  // Status da query ativa — subscrito via Realtime para disparar síntese/refinamento
+  // somente quando o Inngest confirmar que TODOS os batches foram concluídos.
+  const [queryStatus, setQueryStatus] = useState<string | null>(null);
+
+  // Handler reutilizável entre a subscrição principal e as extras
+  const handlePayload = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (payload: any) => {
+      if (payload.eventType === 'INSERT') {
+        setData((prev) => {
+          if (prev.some((a) => a.id === payload.new.id)) return prev;
+          return [mapArticle(payload.new), ...prev];
+        });
+      }
+      if (payload.eventType === 'UPDATE') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const raw = payload.new as any;
+        setData((prev) =>
+          prev.map((item) => {
+            if (item.id !== raw.id) return item;
+            const mappedRaw = mapArticle(raw);
+            return {
+              ...item,
+              doi: mappedRaw.doi ?? item.doi,
+              title: mappedRaw.title ?? item.title,
+              authors: mappedRaw.authors ?? item.authors,
+              sourceName: mappedRaw.sourceName ?? item.sourceName,
+              publicationYear: mappedRaw.publicationYear ?? item.publicationYear,
+              originalUrl: mappedRaw.originalUrl ?? item.originalUrl,
+              status: mappedRaw.status ?? item.status,
+              tldrContent: mappedRaw.tldrContent ?? item.tldrContent,
+              abstract: mappedRaw.abstract ?? item.abstract,
+              keywords: mappedRaw.keywords ?? item.keywords,
+              citationCount: mappedRaw.citationCount ?? item.citationCount,
+              publisher: mappedRaw.publisher ?? item.publisher,
+              isOpenAccess: mappedRaw.isOpenAccess ?? item.isOpenAccess,
+              metadataSource: mappedRaw.metadataSource ?? item.metadataSource,
+              updatedAt: mappedRaw.updatedAt,
+            };
+          })
+        );
+      }
+      if (payload.eventType === 'DELETE') {
+        setData((prev) => prev.filter((item) => item.id !== payload.old.id));
+      }
+    },
+    []
+  );
+
+  /** Fase 3 (P-PDF): adiciona uma queryId de upload à lista de subscriptions ativas */
+  const addQueryId = useCallback((id: string) => {
+    setExtraQueryIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
 
   // Fase 1: busca inicial por chatId (todos os artigos do chat)
   const fetchByChatId = useCallback(async (cid: string) => {
@@ -92,6 +153,12 @@ export function useSupabaseRealtime(
       setData(rows.map(mapArticle));
     }
   }, []);
+
+  /** Recarrega todos os artigos do chat — útil após upload para mostrar o novo artigo */
+  const refreshByChatId = useCallback(async () => {
+    if (!chatId) return;
+    await fetchByChatId(chatId);
+  }, [chatId, fetchByChatId]);
 
   const fetchInitial = useCallback(async (id: string) => {
     logger.log(`[useSupabaseRealtime] fetchInitial starting for ${id}`);
@@ -119,6 +186,7 @@ export function useSupabaseRealtime(
   // Fase 1: busca inicial por chatId ao montar (recupera historico de buscas anteriores)
   useEffect(() => {
     if (!chatId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchByChatId(chatId);
   }, [chatId, fetchByChatId]);
 
@@ -126,6 +194,7 @@ export function useSupabaseRealtime(
     logger.log(`[useSupabaseRealtime] Hook mounted/queryId changed: ${activeQueryId}`);
     if (!activeQueryId) return;
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRealtimeStatus('connecting');
     fetchInitial(activeQueryId);
 
@@ -140,51 +209,7 @@ export function useSupabaseRealtime(
           table: 'articles',
           filter: `query_id=eq.${activeQueryId}`,
         },
-        (payload) => {
-          logger.log('Realtime Update:', payload);
-          // Handle Insert
-          if (payload.eventType === 'INSERT') {
-            setData((prev) => {
-              // Fase 1: evita duplicatas se fetchByChatId ja inseriu o artigo
-              if (prev.some((a) => a.id === payload.new.id)) return prev;
-              return [mapArticle(payload.new), ...prev];
-            });
-          }
-          // Handle Update
-          if (payload.eventType === 'UPDATE') {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const raw = payload.new as any;
-            setData((prev) =>
-              prev.map((item) => {
-                if (item.id !== raw.id) return item;
-                const mappedRaw = mapArticle(raw);
-                return {
-                  ...item,
-                  doi: mappedRaw.doi ?? item.doi,
-                  title: mappedRaw.title ?? item.title,
-                  authors: mappedRaw.authors ?? item.authors,
-                  sourceName: mappedRaw.sourceName ?? item.sourceName,
-                  publicationYear: mappedRaw.publicationYear ?? item.publicationYear,
-                  originalUrl: mappedRaw.originalUrl ?? item.originalUrl,
-                  status: mappedRaw.status ?? item.status,
-                  // H-01: markdownContent nunca sincronizado via WebSocket
-                  tldrContent: mappedRaw.tldrContent ?? item.tldrContent,
-                  abstract: mappedRaw.abstract ?? item.abstract,
-                  keywords: mappedRaw.keywords ?? item.keywords,
-                  citationCount: mappedRaw.citationCount ?? item.citationCount,
-                  publisher: mappedRaw.publisher ?? item.publisher,
-                  isOpenAccess: mappedRaw.isOpenAccess ?? item.isOpenAccess,
-                  metadataSource: mappedRaw.metadataSource ?? item.metadataSource,
-                  updatedAt: mappedRaw.updatedAt,
-                };
-              })
-            );
-          }
-          // Handle Delete
-          if (payload.eventType === 'DELETE') {
-            setData((prev) => prev.filter((item) => item.id !== payload.old.id));
-          }
-        }
+        handlePayload
       )
       .subscribe((status) => {
         // E-04: monitorar estado da conexao WebSocket
@@ -199,10 +224,13 @@ export function useSupabaseRealtime(
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           logger.warn(`[useSupabaseRealtime] Canal em estado: ${status} - agendando reconexao`);
           setRealtimeStatus('disconnected');
-          // Refetch manual como fallback apos 5s para nao perder atualizacoes
+          // Refetch manual imediato + re-subscribe após 5s
+          // O refetch garante dados atualizados mesmo sem WebSocket
+          fetchInitial(activeQueryId);
           reconnectTimerRef.current = setTimeout(() => {
-            logger.log('[useSupabaseRealtime] Refetch manual apos desconexao');
-            fetchInitial(activeQueryId);
+            logger.log('[useSupabaseRealtime] Re-subscribe apos desconexao');
+            // Incrementa trigger → useEffect cleanup + nova subscrição
+            setReconnectTrigger((n) => n + 1);
           }, 5_000);
         } else if (status === 'CLOSED') {
           setRealtimeStatus('disconnected');
@@ -216,7 +244,125 @@ export function useSupabaseRealtime(
       }
       supabase.removeChannel(channel);
     };
-  }, [activeQueryId, fetchInitial]);
+    // reconnectTrigger força re-criação do canal após TIMED_OUT/CHANNEL_ERROR
+  }, [activeQueryId, fetchInitial, reconnectTrigger, handlePayload]);
 
-  return { data, realtimeStatus };
+  // Fase 3 (P-PDF): subscriptions extras para queryIds de uploads
+  useEffect(() => {
+    if (extraQueryIds.size === 0) return;
+    const channels = Array.from(extraQueryIds).map((qId) => {
+      fetchInitial(qId); // busca inicial para o queryId do upload
+      return supabase
+        .channel(`articles_upload_${qId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'articles', filter: `query_id=eq.${qId}` },
+          handlePayload
+        )
+        .subscribe();
+    });
+    return () => {
+      channels.forEach((ch) => supabase.removeChannel(ch));
+    };
+  }, [extraQueryIds, fetchInitial, handlePayload]);
+
+  // Subscrição ao status da query ativa — dispara síntese só quando
+  // Inngest marca searchQueries.status = 'done' (todos os batches concluídos).
+  useEffect(() => {
+    if (!activeQueryId) {
+      setQueryStatus(null);
+      return;
+    }
+
+    // Fetch inicial do status da query
+    supabase
+      .from('search_queries')
+      .select('status')
+      .eq('id', activeQueryId)
+      .single()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then(({ data: q }: { data: any }) => {
+        if (q?.status) setQueryStatus(q.status as string);
+      });
+
+    const channel = supabase
+      .channel(`query_status_${activeQueryId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'search_queries',
+          filter: `id=eq.${activeQueryId}`,
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (payload: any) => {
+          const newStatus = payload.new?.status as string | undefined;
+          if (newStatus) {
+            logger.log(`[useSupabaseRealtime] Query status → ${newStatus}`);
+            setQueryStatus(newStatus);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeQueryId]);
+
+  // Polling fallback para search_queries.status — necessário quando a tabela não tem
+  // Realtime habilitado no Supabase Dashboard. Consulta a cada 3s enquanto o status
+  // não atingiu um estado terminal. O Realtime (acima) continua ativo e, se funcionar,
+  // atualiza o estado mais rápido — o polling só age se o Realtime silenciar.
+  const TERMINAL_STATUSES = new Set(['done', 'needs_refinement', 'failed', 'cancelled']);
+  useEffect(() => {
+    if (!activeQueryId) return;
+    if (queryStatus && TERMINAL_STATUSES.has(queryStatus)) return; // já terminal
+
+    let consecutiveNulls = 0;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const poll = async () => {
+      // maybeSingle() retorna null (sem erro) se 0 linhas — evita 406 do PostgREST
+      const { data: q, error } = await supabase
+        .from('search_queries')
+        .select('status')
+        .eq('id', activeQueryId)
+        .maybeSingle();
+
+      if (error) {
+        logger.warn(`[useSupabaseRealtime] Poll erro: ${error.message}`);
+        return;
+      }
+
+      if (q === null) {
+        // ID não encontrado na tabela (ex: activeQueryId resolveu para chat_id após reload)
+        consecutiveNulls++;
+        if (consecutiveNulls >= 2) {
+          logger.warn(
+            `[useSupabaseRealtime] Poll: ID ${activeQueryId} não encontrado em search_queries — parando polling`
+          );
+          if (intervalId) clearInterval(intervalId);
+        }
+        return;
+      }
+
+      consecutiveNulls = 0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const newStatus = (q as any)?.status as string | undefined;
+      if (newStatus && newStatus !== queryStatus) {
+        logger.log(`[useSupabaseRealtime] Poll: query status → ${newStatus}`);
+        setQueryStatus(newStatus);
+      }
+    };
+
+    intervalId = setInterval(() => void poll(), 3_000);
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeQueryId, queryStatus]);
+
+  return { data, realtimeStatus, addQueryId, refreshByChatId, queryStatus };
 }

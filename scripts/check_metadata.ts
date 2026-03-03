@@ -1,6 +1,6 @@
 import { db } from '../src/server/db';
 import { articles } from '../src/server/db/schema';
-import { desc, isNotNull } from 'drizzle-orm';
+import { desc } from 'drizzle-orm';
 
 async function main() {
   const recentArticles = await db

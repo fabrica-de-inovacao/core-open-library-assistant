@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 export interface UserSettings {
   /** Idioma para geração de TL;DRs pelo Inngest. 'pt-BR' é o padrão. */
@@ -40,12 +40,7 @@ function loadFromStorage(): UserSettings {
  * ```
  */
 export function useUserSettings() {
-  const [settings, setSettings] = useState<UserSettings>(DEFAULTS);
-
-  // Lê do localStorage apenas no cliente (após hidratação)
-  useEffect(() => {
-    setSettings(loadFromStorage());
-  }, []);
+  const [settings, setSettings] = useState<UserSettings>(loadFromStorage);
 
   const updateSetting = useCallback(
     <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {

@@ -30,7 +30,7 @@ export const OpenAlexWorkSchema = z.object({
   doi: z.string().nullable().optional(),
   primary_location: OpenAlexPrimaryLocationSchema.nullable().optional(),
   cited_by_count: z.number().nullable().optional(),
-  keywords: z.array(z.object({ keyword: z.string() })).optional(),
+  keywords: z.array(z.object({ keyword: z.string().optional() }).passthrough()).optional(),
 });
 
 export const OpenAlexResponseSchema = z.object({

@@ -25,7 +25,7 @@ export interface RankedArticle {
 /**
  * Reavalia a relevância de artigos em relação ao tópico usando LLM.
  *
- * @param articles  Lista pre-rankeada pelo score composto (até 15 artigos)
+ * @param articles  Lista pre-rankeada pelo score composto (até 25 artigos)
  * @param topic     Tópico da pesquisa em linguagem natural
  * @returns         Lista reordenada por relevância semântica (maior = mais relevante)
  */
@@ -35,7 +35,7 @@ export async function runRerankerAgent(articles: Article[], topic: string): Prom
   // Para listas pequenas, o score composto já é suficiente
   if (articles.length <= 3) return articles;
 
-  const candidates = articles.slice(0, 15); // teto para controle de custo
+  const candidates = articles.slice(0, 25); // teto para controle de custo (até 25 artigos)
 
   console.log(
     `[RerankerAgent] 🔍 Avaliando relevância | artigos=${candidates.length} | topic="${topic.slice(0, 60)}" | model=${getModelIdForTask('reranker')}`
@@ -89,7 +89,7 @@ Retorne o array JSON com os índices ordenados por relevância semântica ao tó
   const remaining = candidates.filter((_, i) => !includedIndices.has(i));
 
   // Artigos além de candidates (> 15) ficam ao final
-  const tail = articles.slice(15);
+  const tail = articles.slice(25);
 
   console.log(`[RerankerAgent] ✅ Reranking concluído | ${reranked.length} artigos reordenados`);
 
