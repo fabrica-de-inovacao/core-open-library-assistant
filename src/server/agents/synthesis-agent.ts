@@ -48,8 +48,11 @@ export async function runSynthesisAgent(
   queryId: string,
   depth: SynthesisDepth = 'full'
 ): Promise<SynthesisResult> {
-  // Ajusta top-K por profundidade: brief usa menos artigos (mais foco)
-  const maxArticles = depth === 'brief' ? 8 : 15;
+  // Fase C (IA-04): caps ajustados por profundidade de síntese.
+  // brief: 8→5 (eram ignorados pela LLM — 2-3 parágrafos não absorvem 8 artigos)
+  // standard: 15→10 (tabela comparativa fica mais legível com 10)
+  // full: mantém 15 para cobertura máxima
+  const maxArticles = depth === 'brief' ? 5 : depth === 'standard' ? 10 : 15;
   const topK = articles.slice(0, maxArticles);
 
   console.log(

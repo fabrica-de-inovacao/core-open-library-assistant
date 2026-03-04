@@ -126,6 +126,58 @@ const DEFINITIONAL_PATTERNS = [
   /^o\s+que\s+significa\s+/i, // "o que significa X"
 ];
 
+/**
+ * Detecta perguntas de opinião/retóricas PURAS curtas (≤ 6 palavras, terminam em ?).
+ * Critério: verbo de ligação (é/são) + adjetivo de julgamento, ou estruturas retóricas pronominais.
+ * Ex capturados: "React é bom?", "isso é correto?", "IA é perigosa?", "isso funciona?"
+ * Ex NÃO capturados (intencionalmente): "IA gasta água?", "LLMs consomem energia?" — são
+ * perguntas EMPÍRICAS com potencial acadêmico → rota quick_lookup → busca SOL → chips OpenAlex.
+ * Fase C (IA-04): fix RouterAgent para opiniões puras.
+ */
+const OPINION_QUESTION_PATTERNS = [
+  // Verbo de estado/opinião no início: "é X?", "isso é X?"
+  /^(isso|aquilo|ele|ela|eles)?\s*(é|sao|são|foi|era|será|pode|vai|deve)\s+/i,
+  // "IA é X?", "React é bom?"
+  /^[\w\s]{1,30}\s+(é|são|foi|era|será|bom|ruim|melhor|pior|certo|errado|util|inútil)\b.*\?$/i,
+  // "isso funciona?", "isso vale?", "realmente funciona?"
+  /^(isso|isto|aqui|realmente|ainda|já|mesmo)?\s*(funciona|vale|serve|existe|acontece|faz sentido)\b.*\?$/i,
+];
+
+/** Keywords que indicam intenção bibliográfica (impedem rota conversational) */
+const BIBLIOGRAPHIC_INTENT_WORDS = [
+  'artigo',
+  'artigos',
+  'paper',
+  'papers',
+  'publicação',
+  'publicações',
+  'pesquisa',
+  'estudos',
+  'literatura',
+  'referência',
+  'referências',
+  'busca',
+  'buscar',
+  'encontrar',
+  'revisar',
+  'revisão',
+];
+
+/**
+ * Retorna true se o input for uma pergunta de opinião/retórica curta
+ * sem intenção bibliográfica explícita.
+ */
+function isShortOpinionQuestion(input: string, wordCount: number): boolean {
+  if (wordCount > 6) return false; // Só aplica em inputs curtos
+  const trimmed = input.trim();
+  if (!trimmed.endsWith('?')) return false; // Deve terminar com ?
+  const lower = trimmed.toLowerCase();
+  // Se contém intenção bibliográfica, não é opinião pura
+  if (BIBLIOGRAPHIC_INTENT_WORDS.some((w) => lower.includes(w))) return false;
+  // Deve bater em um padrão de opinião
+  return OPINION_QUESTION_PATTERNS.some((p) => p.test(lower));
+}
+
 function lexicalRoute(input: string): RouteResult | null {
   const normalized = input.toLowerCase().trim();
 
@@ -263,6 +315,21 @@ export async function runRouterAgent(
       `[RouterAgent] ✅ intent=${lexResult.intent} | confidence=rule | words=${wordCount}`
     );
     return lexResult;
+  }
+
+  // Fase C (IA-04): perguntas de opinião/retóricas curtas → conversational
+  // Ex: "IA gasta agua?", "React é bom?", "isso funciona?"
+  if (isShortOpinionQuestion(input, wordCount)) {
+    const result: RouteResult = {
+      intent: 'conversational',
+      confidence: 'rule',
+      reasoning: `Short opinion/rhetorical question (${wordCount} words, ends with ?) — routing to conversational`,
+      synthesisDepth: 'brief',
+    };
+    console.log(
+      `[RouterAgent] ✅ intent=${result.intent} | confidence=rule (opinion) | words=${wordCount}`
+    );
+    return result;
   }
 
   // Ambíguo: inputs curtos sem marcadores são provavelmente quick_lookup

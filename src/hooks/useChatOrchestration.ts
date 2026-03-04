@@ -31,15 +31,17 @@ export type SuggestionChip = { label: string; icon: string; message: string };
 // Fase C (IA-04): modo de síntese selecionável pelo usuário
 export type SynthesisMode = 'auto' | 'quick' | 'systematic';
 
+// Chips de override manual — a IA já tenta o próximo passo automaticamente,
+// mas o usuário pode forçar uma estratégia específica clicando nos chips.
 const NEEDS_REFINEMENT_CHIPS: SuggestionChip[] = [
   {
-    label: 'Nova busca SOL mais ampla',
+    label: 'Forçar nova busca SOL',
     icon: '🔍',
     message:
       'Proponha uma nova busca na base SOL com termos mais amplos e abrangentes do que os anteriores',
   },
   {
-    label: 'Expandir ao OpenAlex',
+    label: 'Ir direto ao OpenAlex',
     icon: '🌐',
     message: 'Proponha agora uma busca na base global OpenAlex para ampliar o corpus',
   },
@@ -177,6 +179,15 @@ export function useChatOrchestration({
   // Fase 3 (P-chips): chips de ação rápida exibidos no input após needs_refinement
   const [suggestionChips, setSuggestionChips] = useState<SuggestionChip[] | null>(null);
   const clearSuggestionChips = useCallback(() => setSuggestionChips(null), []);
+  /**
+   * Fase C (IA-04) — Automação de fallback de busca.
+   * Conta quantas vezes a busca falhou (needs_refinement) nesta sessão.
+   *   0 → nunca falhou
+   *   1 → 1ª falha: AI relança propose_search_sol_database automaticamente (termos mais amplos)
+   *   2+ → 2ª+ falha: AI escala automaticamente para propose_search_global_database
+   * Resetado quando uma busca conclui com sucesso (queryStatus=done).
+   */
+  const solSearchFailureCountRef = useRef<number>(0);
   // Fase 3 (P-23): IDs executados na sessão atual (complementado pela derivação abaixo)
   const [localExecutedIds, setLocalExecutedIds] = useState<Set<string>>(new Set());
 
@@ -261,12 +272,25 @@ export function useChatOrchestration({
             return n;
           });
           reviewedQueryIdsRef.current.add(qId);
-          // Fase 3 (P-chips): exibe chips de ação rápida no input
+
+          // Fase C (IA-04): automação de fallback — AI age sozinha, notifica o usuário.
+          // Chips ficam visíveis como override manual caso o usuário queira controlar.
+          solSearchFailureCountRef.current += 1;
+          const failCount = solSearchFailureCountRef.current;
           setSuggestionChips(NEEDS_REFINEMENT_CHIPS);
+
           setTimeout(() => {
-            sendMessageRef.current({
-              text: `[SISTEMA] A busca retornou apenas ${data.total_found ?? 0} resultado(s) — insuficiente para revisão sistemática. NÃO chame generate_systematic_review. Em UMA frase curta e direta, informe ao usuário que os resultados foram insuficientes e que os botões de ação aparecerão para ele escolher o próximo passo. NÃO liste opções numeradas.`,
-            });
+            if (failCount === 1) {
+              // 1ª falha: AI relança SOL automaticamente com termos diversificados
+              sendMessageRef.current({
+                text: `[SISTEMA] A busca SOL retornou apenas ${data.total_found ?? 0} resultado(s) — insuficiente para revisão sistemática. Chame IMEDIATAMENTE propose_search_sol_database com o MESMO tópico da conversa e queries:[]. O agente de estratégia já tem acesso ao histórico de buscas anteriores desta sessão e irá diversificar os termos automaticamente. Antes de chamar a tool, escreva EXATAMENTE UMA frase curta em Português informando ao usuário: (1) quantos resultados foram encontrados, (2) que você está tentando automaticamente com uma estratégia mais ampla. NÃO use essa frase de forma genérica — mencione o número exato de resultados.`,
+              });
+            } else {
+              // 2ª+ falha: AI escala para OpenAlex automaticamente
+              sendMessageRef.current({
+                text: `[SISTEMA] Após ${failCount} tentativas na base SOL sem resultados suficientes para o tema, chame IMEDIATAMENTE propose_search_global_database com o tópico da conversa em inglês/conceitos. Antes de chamar a tool, escreva EXATAMENTE DUAS frases em Português: (1) diga quantas tentativas foram feitas na SOL e que nenhuma trouxe artigos suficientes, (2) explique que você está expandindo automaticamente para a base global OpenAlex (+250 milhões de artigos científicos).`,
+              });
+            }
           }, 300);
           return;
         }
@@ -594,6 +618,8 @@ export function useChatOrchestration({
 
     if (queryStatus === 'done') {
       reviewedQueryIdsRef.current.add(activeQueryId);
+      // Fase C (IA-04): busca bem-sucedida — reseta contador de falhas
+      solSearchFailureCountRef.current = 0;
       if (typeof window !== 'undefined') {
         localStorage.setItem(`sol_review_done_${activeQueryId}`, 'true');
 
@@ -647,12 +673,24 @@ export function useChatOrchestration({
         n.delete(activeQueryId);
         return n;
       });
-      // Fase 3 (P-chips): exibe chips de ação rápida no input
+
+      // Fase C (IA-04): mesma lógica de automação da falha via API.
+      // Este caminho é acionado pelo Supabase Realtime após o RelevanceGate do Inngest.
+      solSearchFailureCountRef.current += 1;
+      const failCount = solSearchFailureCountRef.current;
       setSuggestionChips(NEEDS_REFINEMENT_CHIPS);
       setTimeout(() => {
-        sendMessageRef.current({
-          text: `[SISTEMA] Os artigos encontrados não têm relevância suficiente para o tema. NÃO chame generate_systematic_review. Em UMA frase curta e direta, informe ao usuário que os resultados não foram relevantes e que os botões de ação aparecerão para ele escolher o próximo passo. NÃO liste opções numeradas.`,
-        });
+        if (failCount === 1) {
+          // 1ª falha (RelevanceGate rejeitou): AI relança SOL automaticamente
+          sendMessageRef.current({
+            text: `[SISTEMA] Os artigos encontrados não têm relevância suficiente para o tema (rejeitados pelo gate de qualidade). Chame IMEDIATAMENTE propose_search_sol_database com o MESMO tópico da conversa e queries:[]. O agente de estratégia já sabe quais queries foram usadas e vai diversificar os termos. Antes de chamar a tool, escreva EXATAMENTE UMA frase curta em Português informando ao usuário que os artigos encontrados não eram relevantes e que você está tentando automaticamente com uma estratégia diferente.`,
+          });
+        } else {
+          // 2ª+ falha: AI escala para OpenAlex automaticamente
+          sendMessageRef.current({
+            text: `[SISTEMA] Após ${failCount} tentativas na base SOL sem resultados relevantes para o tema, chame IMEDIATAMENTE propose_search_global_database com o tópico da conversa em inglês/conceitos. Antes de chamar a tool, escreva EXATAMENTE DUAS frases em Português: (1) mencione que após várias tentativas a SOL não encontrou artigos suficientemente relevantes, (2) explique que está expandindo automaticamente para a base global OpenAlex (+250 milhões de artigos científicos).`,
+          });
+        }
       }, 300);
     }
   }, [activeQueryId, queryStatus]);

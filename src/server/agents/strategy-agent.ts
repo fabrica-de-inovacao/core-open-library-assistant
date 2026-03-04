@@ -23,13 +23,17 @@ export interface StrategyResult {
 
 /**
  * Gera strings de busca booleanas otimizadas para um tópico de pesquisa.
- * @param topic  Tópico em linguagem natural (ex: "gamificação no ensino superior")
- * @param rawQueries  Queries iniciais sugeridas pelo LLM orquestrador (opcional)
+ * @param topic                 Tópico em linguagem natural (ex: "gamificação no ensino superior")
+ * @param rawQueries            Queries iniciais sugeridas pelo LLM orquestrador (opcional)
+ * @param previousFailedQueries Strings de busca usadas em buscas anteriores desta sessão
+ *                              que retornaram poucos resultados — o agente deve evitá-las.
+ *                              Fase C (IA-04): evita repetição de estratégias falhas.
  * @returns      Queries refinadas + justificativa
  */
 export async function runStrategyAgent(
   topic: string,
-  rawQueries: string[] = []
+  rawQueries: string[] = [],
+  previousFailedQueries: string[] = []
 ): Promise<StrategyResult> {
   console.log(
     `[StrategyAgent] 🗺️  Planejando estratégia | topic="${topic.slice(0, 60)}" | model=${getModelIdForTask('strategy')}`
@@ -50,6 +54,13 @@ export async function runStrategyAgent(
     ? `\nQueries iniciais sugeridas (refine se necessário):\n${rawQueries.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
     : '';
 
+  // Fase C (IA-04): injeta histórico de estratégias falhas para evitar repetição.
+  // O agente vê explicitamente o que NÃO funcionou e deve diversificar os termos.
+  const failedSection =
+    previousFailedQueries.length > 0
+      ? `\n\n⚠️ BUSCAS ANTERIORES QUE RETORNARAM POUCOS RESULTADOS (NÃO repita estes termos e estratégias):\n${previousFailedQueries.map((q, i) => `${i + 1}. ${q}`).join('\n')}\nDiversifique os termos, use sinônimos alternativos e explore ângulos diferentes do tópico.`
+      : '';
+
   const { text } = await generateText({
     model: getModelForTask('strategy'),
     system: `Você é um especialista em estratégias de busca bibliográfica sistemática (PRISMA/Cochrane).
@@ -65,7 +76,7 @@ REGRAS:
 7. As queries devem ser compatíveis com SBC OpenLib e OpenAlex.
 8. NOMES PRÓPRIOS (projetos, programas, siglas, instituições): PRESERVE-OS exatamente como fornecidos entre aspas duplas — NUNCA os traduza. Ex.: "Sereias Digitais", "ProInfo", "ENEM".
 9. Retorne APENAS o JSON. Sem texto extra.`,
-    prompt: `Tópico de pesquisa: "${topic}"${rawSection}
+    prompt: `Tópico de pesquisa: "${topic}"${rawSection}${failedSection}
 ${profileContext}${fewShotContext}
 
 Gere as strings de busca booleana otimizadas:`,

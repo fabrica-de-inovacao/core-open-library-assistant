@@ -164,7 +164,9 @@ export function retrieveUseCaseExamples(topic: string, topN = 2): string {
     score: lexicalSimilarity(topic, `${ex.topic} ${ex.domain}`),
   })).sort((a, b) => b.score - a.score);
 
-  const top = scored.slice(0, topN).filter((s) => s.score > 0.05); // threshold mínimo
+  // Fase C (IA-04): threshold 0.05→0.15 — evita injetar exemplos irrelevantes como
+  // few-shot context no StrategyAgent (ex: "blockchain" para "ensino de crianças").
+  const top = scored.slice(0, topN).filter((s) => s.score > 0.15);
 
   if (top.length === 0) return '';
 

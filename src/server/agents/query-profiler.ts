@@ -112,7 +112,10 @@ export function profileQuery(topic: string): QueryProfile {
   let complexity: QueryComplexity;
   let suggestedQueryCount: 1 | 2 | 3 | 4;
 
-  if (isSpecific || wordCount <= 4) {
+  // Fase C (IA-04): threshold ajustado de 4→3 palavras.
+  // "gamificação e educação" (4 palavras, 2 conceitos) merecia 2 queries — corrigido.
+  // Tópicos de 4 palavras com 2+ conceitos distintos agora caem em 'moderate'.
+  if (isSpecific || wordCount <= 3) {
     complexity = 'simple';
     suggestedQueryCount = 1;
   } else if (

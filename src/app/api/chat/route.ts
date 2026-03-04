@@ -343,6 +343,20 @@ ${bibliographySummary || 'Nenhum artigo listado.'}`;
       if (doneArticles.length <= 5) {
         fallbackInstruction += `\n\n**AVISO:** Poucos artigos encontrados na base SOL (<= 5). Se adequado, sugira ao usuário ampliar a busca para a base global (**OpenAlex**) chamando \`propose_search_global_database\`.`;
       }
+    } else if (qData?.status === 'needs_refinement') {
+      // Fase C (IA-04): instrução específica para busca insuficiente.
+      // Quando o usuário clica em "Nova busca SOL mais ampla" (chip de refinamento),
+      // o LLM recebe um [SISTEMA] e deve propor nova estratégia diversificada.
+      fallbackInstruction = `
+
+**CONTEXTO DA SESSÃO ATUAL — BUSCA INSUFICIENTE:**
+A busca anterior para o tópico "${qData.originalQuery ?? queryId}" retornou POUCOS resultados na base SOL (< 5 artigos relevantes).
+O sistema já ajustou automaticamente a estratégia de busca para evitar repetição dos termos anteriores.
+
+**AÇÃO OBRIGATÓRIA:**
+- Se o usuário solicitar nova busca SOL (ex: "Nova busca mais ampla", "tente outros termos"), chame IMEDIATAMENTE \`propose_search_sol_database\` com o MESMO \`topic\` da query original mas com \`queries: []\` para que o agente de estratégia gere termos diversificados.
+- Se o usuário solicitar busca global ou mencionar OpenAlex/ACM/IEEE, chame \`propose_search_global_database\`.
+- NÃO explique o motivo do problema — apenas execute a busca solicitada.`;
     }
   }
 

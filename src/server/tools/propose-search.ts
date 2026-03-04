@@ -6,6 +6,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
+import { desc, eq, ne, and } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries } from '@/server/db/schema';
 import { runStrategyAgent } from '@/server/agents/strategy-agent';
@@ -44,11 +45,41 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
       logger.debug('[Tool] queries brutas:', rawQueries);
 
       try {
+        // Fase C (IA-04): busca até 3 estratégias anteriores desta sessão para evitar repetição.
+        // Filtra 'proposed' (nunca executadas) e usa expandedQuery (já processada pelo StrategyAgent).
+        let previousFailedQueries: string[] = [];
+        if (ctx.chatId) {
+          try {
+            const prevRows = await db
+              .select({
+                expandedQuery: searchQueries.expandedQuery,
+                originalQuery: searchQueries.originalQuery,
+              })
+              .from(searchQueries)
+              .where(
+                and(eq(searchQueries.chatId, ctx.chatId), ne(searchQueries.status, 'proposed'))
+              )
+              .orderBy(desc(searchQueries.createdAt))
+              .limit(3);
+            // Usa expandedQuery quando disponível (é a string real usada na busca)
+            previousFailedQueries = prevRows
+              .map((r) => r.expandedQuery ?? r.originalQuery ?? '')
+              .filter(Boolean);
+            if (previousFailedQueries.length > 0) {
+              logger.info(
+                `[Tool] Histórico de estratégias anteriores: ${previousFailedQueries.length} queries recuperadas`
+              );
+            }
+          } catch (dbErr) {
+            logger.warn('[Tool] Falha ao buscar histórico de queries anteriores:', dbErr);
+          }
+        }
+
         // I-04: strategy-agent gera todas as queries a partir do topic
         let finalQueries = rawQueries;
         if (topic) {
           try {
-            const strategy = await runStrategyAgent(topic, rawQueries);
+            const strategy = await runStrategyAgent(topic, rawQueries, previousFailedQueries);
             finalQueries = strategy.queries;
             logger.info(
               `[Tool] StrategyAgent: geradas ${finalQueries.length} queries para tópico "${topic.slice(0, 60)}"`
@@ -117,7 +148,22 @@ export function buildProposeSearchGlobalDatabaseTool(ctx: ToolContext) {
         ),
     }),
     execute: async (input) => {
-      const { query } = input;
+      const { query: rawQuery } = input;
+
+      // Sanitiza delimitadores que o LLM ocasionalmente injeta na query:
+      // triple-quotes ('''...'''), backticks, aspas simples/duplas externas.
+      // Ex: "'''AI water consumption'''" → "AI water consumption"
+      const query = rawQuery
+        .replace(/^'{3}|'{3}$/g, '') // remove ''' do início/fim
+        .replace(/^"{3}|"{3}$/g, '') // remove """ do início/fim
+        .replace(/^`+|`+$/g, '') // remove backticks externos
+        .trim();
+
+      if (query !== rawQuery) {
+        logger.warn(
+          `[Tool] propose_search_global_database | query sanitizada: "${rawQuery}" → "${query}"`
+        );
+      }
       logger.info('[Tool] propose_search_global_database | query:', query);
 
       const [insertedQuery] = await db
