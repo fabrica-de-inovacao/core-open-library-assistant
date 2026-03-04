@@ -22,7 +22,7 @@ export function NavItem({ href, icon, label, active }: NavItemProps) {
           <Link
             href={href}
             className={cn(
-              'group flex h-9 w-full items-center gap-3 rounded px-2.5 text-[13px]',
+              'group flex h-9 w-full items-center gap-3 rounded px-3 text-[13px]',
               'group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0',
               'transition-colors duration-100',
               active

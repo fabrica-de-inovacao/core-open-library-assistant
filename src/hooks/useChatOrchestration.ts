@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import {
   type UIMessage,
   DefaultChatTransport,
@@ -26,6 +27,9 @@ import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
 
 // Fase 3 (P-chips): chips de sugestão rápida exibidos no input quando needs_refinement
 export type SuggestionChip = { label: string; icon: string; message: string };
+
+// Fase C (IA-04): modo de síntese selecionável pelo usuário
+export type SynthesisMode = 'auto' | 'quick' | 'systematic';
 
 const NEEDS_REFINEMENT_CHIPS: SuggestionChip[] = [
   {
@@ -53,13 +57,48 @@ interface UseChatOrchestrationOptions {
   authStatus: 'authenticated' | 'unauthenticated' | 'loading';
   /** P-22: ID do modelo selecionado pelo usuário (ex: "gemini-2.5-flash") */
   modelId?: string;
+  /** Override do limite de artigos por busca — sobropõe sol-settings.articlesPerSearch quando definido */
+  searchLimitOverride?: number;
+  /**
+   * Fase C (IA-04): modo de síntese explícito selecionado pelo usuário na UI.
+   * 'auto'       → RouterAgent decide automaticamente (padrão)
+   * 'quick'      → força quick_lookup + síntese brief/standard
+   * 'systematic' → força systematic_review + síntese full
+   */
+  initialSynthesisMode?: SynthesisMode;
 }
 
 export function useChatOrchestration({
   urlQueryId,
   initialMessages,
   modelId,
+  searchLimitOverride,
+  initialSynthesisMode = 'auto',
 }: UseChatOrchestrationOptions) {
+  // ── Pathname tracking (navegação intencional) ──────────────────────────────
+  // Fase 1 (P-01-fix): detecta quando o utilizador navega intencionalmente
+  // para fora do chat via sidebar, para não sobrescrever a URL com replaceState.
+  const pathname = usePathname();
+  const prevPathnameRef = useRef<string>(pathname);
+  // Flag: true enquanto o utilizador está numa rota que não é o chat atual
+  const navAwayFromChatRef = useRef<boolean>(false);
+
+  // Efeito sem deps: corre após cada render para rastrear mudanças de pathname.
+  // Declarado ANTES do efeito de URL para garantir que o flag é actualizado primeiro.
+  useEffect(() => {
+    const prev = prevPathnameRef.current;
+    prevPathnameRef.current = pathname;
+
+    // Veio de uma rota de chat e saiu → navegação intencional
+    if (prev.startsWith('/workspace/chat/') && !pathname.startsWith('/workspace/chat/')) {
+      navAwayFromChatRef.current = true;
+    }
+    // Voltou para uma rota de chat → resetar flag
+    if (pathname.startsWith('/workspace/chat/')) {
+      navAwayFromChatRef.current = false;
+    }
+  });
+
   // ── Session State ───────────────────────────────────────────────────────────
 
   const [sessionQueryId, setSessionQueryId] = useState<string | null>(urlQueryId ?? null);
@@ -83,6 +122,17 @@ export function useChatOrchestration({
     modelIdRef.current = modelId;
   }, [modelId]);
 
+  // Ref para searchLimitOverride — evita re-criação de closures em callbacks de busca
+  const searchLimitOverrideRef = useRef<number | undefined>(searchLimitOverride);
+  useEffect(() => {
+    searchLimitOverrideRef.current = searchLimitOverride;
+  }, [searchLimitOverride]);
+  // Fase C (IA-04): modo de síntese selecionável pelo usuário
+  const [synthesisMode, setSynthesisMode] = useState<SynthesisMode>(initialSynthesisMode);
+  const synthesisModeRef = useRef<SynthesisMode>(initialSynthesisMode);
+  useEffect(() => {
+    synthesisModeRef.current = synthesisMode;
+  }, [synthesisMode]);
   // ── Transport ─────────────────────────────────────────────────────────────────────────
 
   const chatTransport = useMemo(
@@ -94,6 +144,10 @@ export function useChatOrchestration({
           chatId: chatIdRef.current,
           // P-22: inclui modelId quando selecionado
           ...(modelIdRef.current ? { modelId: modelIdRef.current } : {}),
+          // Fase C (IA-04): modo de síntese (undefined = auto, passa para o router decidir)
+          ...(synthesisModeRef.current !== 'auto'
+            ? { userSynthesisMode: synthesisModeRef.current }
+            : {}),
         }),
       }),
 
@@ -176,12 +230,14 @@ export function useChatOrchestration({
         params.append('query_id', qId);
 
         // Fase 7 (P-settings): injeta preferências do usuário na requisição de busca
+        // searchLimitOverrideRef tem prioridade sobre sol-settings.articlesPerSearch
         try {
           const stored = JSON.parse(localStorage.getItem('sol-settings') ?? '{}') as {
             articlesPerSearch?: number;
             tldrLanguage?: string;
           };
-          if (stored.articlesPerSearch) params.append('limit', String(stored.articlesPerSearch));
+          const effectiveLimit = searchLimitOverrideRef.current ?? stored.articlesPerSearch;
+          if (effectiveLimit) params.append('limit', String(effectiveLimit));
           if (stored.tldrLanguage) params.append('tldr_lang', stored.tldrLanguage);
         } catch {
           /* localStorage indisponível — usa defaults do servidor */
@@ -265,10 +321,15 @@ export function useChatOrchestration({
   // Fase 1 (P-01): URL estável baseada em chatId
   // Só redireciona quando a sessão de facto começou (há mensagens ou uma query ativa).
   // Evita substituir /workspace por /workspace/chat/[id] ao entrar na home sem fazer nada.
+  // P-01-fix: não sobrescreve a URL se o utilizador navegou intencionalmente para fora do chat
+  // (ex: clicou na sidebar para ir ao /workspace ou /workspace/history).
   useEffect(() => {
     const sessionStarted = messages.length > 0 || sessionQueryId !== null;
     if (!sessionStarted || !chatId || typeof window === 'undefined' || isClearingRef.current)
       return;
+
+    // Respeitar navegação intencional do utilizador — não anular o roteamento do Next.js
+    if (navAwayFromChatRef.current) return;
 
     const currentPath = window.location.pathname;
     const targetPath = `/workspace/chat/${chatId}`;
@@ -660,5 +721,8 @@ export function useChatOrchestration({
     // Fase 3 (P-chips): chips de ação rápida
     suggestionChips,
     clearSuggestionChips,
+    // Fase C (IA-04): modo de síntese
+    synthesisMode,
+    setSynthesisMode,
   };
 }

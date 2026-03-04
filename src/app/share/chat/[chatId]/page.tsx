@@ -1,3 +1,4 @@
+import { connection } from 'next/server';
 import { db } from '@/server/db';
 import { searchQueries, articles, chatSessions } from '@/server/db/schema';
 import { eq, inArray } from 'drizzle-orm';
@@ -13,6 +14,7 @@ interface ShareChatPageProps {
 }
 
 export async function generateMetadata({ params }: ShareChatPageProps): Promise<Metadata> {
+  await connection(); // sinaliza ao PPR: não pré-renderizar (chatId é dinâmico)
   const { chatId } = await params;
   const session = await db
     .select({ title: chatSessions.title })
@@ -43,6 +45,7 @@ export async function generateMetadata({ params }: ShareChatPageProps): Promise<
 }
 
 export default async function ShareChatPage({ params }: ShareChatPageProps) {
+  await connection(); // sinaliza ao PPR: não pré-renderizar (chatId é dinâmico)
   const { chatId } = await params;
 
   // Carrega sessão (pode ser null para chats antigos sem chatSession)

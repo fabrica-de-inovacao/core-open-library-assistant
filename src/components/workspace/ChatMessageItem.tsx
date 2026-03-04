@@ -3,7 +3,18 @@
 
 import React, { useState } from 'react';
 import { type UIMessage, isToolOrDynamicToolUIPart, getToolOrDynamicToolName } from 'ai';
-import { Library, Copy, Check, Loader2, Search, Globe, FileText, Cpu } from 'lucide-react';
+import {
+  Library,
+  Copy,
+  Check,
+  Loader2,
+  Search,
+  Globe,
+  FileText,
+  Cpu,
+  ThumbsUp,
+  ThumbsDown,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from 'sonner';
@@ -153,10 +164,17 @@ export const ChatMessageItem = React.memo(
     runningSearches,
   }: ChatMessageItemProps) => {
     const [copied, setCopied] = useState(false);
+    // Fase C (IA-05): feedback pós-síntese
+    const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
 
     const textContent =
       (m.parts?.find((p) => p.type === 'text') as { type: 'text'; text: string } | undefined)
         ?.text ?? '';
+
+    // Síntese detectada pelo cabeçalho "# 📚 TL;DR" gerado pelo SynthesisAgent
+    // (declarado após textContent para evitar TDZ)
+    const SYNTHESIS_EMOJI = '\uD83D\uDCDA'; // 📚
+    const isSynthesisMessage = textContent.includes(`# ${SYNTHESIS_EMOJI}`);
 
     // Texto visível: o smoothStream (backend) já envia palavra a palavra,
     // portanto renderizamos textContent diretamente — sem typewriter manual.
@@ -451,7 +469,7 @@ export const ChatMessageItem = React.memo(
 
           {/* Copy button — sempre visível */}
           {!isStreaming && hasContent && (
-            <div className="mt-2.5">
+            <div className="mt-2.5 flex items-center gap-1">
               <button
                 onClick={handleCopy}
                 className="text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
@@ -468,6 +486,47 @@ export const ChatMessageItem = React.memo(
                   </>
                 )}
               </button>
+
+              {/* Feedback pós-síntese — Fase C (IA-05) */}
+              {isSynthesisMessage && (
+                <>
+                  <div className="bg-border/30 mx-1 h-3 w-px" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = feedback === 'up' ? null : 'up';
+                      setFeedback(next);
+                      if (next === 'up')
+                        toast.success('Obrigado pelo feedback!', { duration: 1800 });
+                    }}
+                    className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                      feedback === 'up'
+                        ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    }`}
+                    title="Síntese útil"
+                  >
+                    <ThumbsUp className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = feedback === 'down' ? null : 'down';
+                      setFeedback(next);
+                      if (next === 'down')
+                        toast.info('Feedback registrado — vamos melhorar!', { duration: 2200 });
+                    }}
+                    className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                      feedback === 'down'
+                        ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    }`}
+                    title="Síntese imprecisa"
+                  >
+                    <ThumbsDown className="h-3 w-3" />
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

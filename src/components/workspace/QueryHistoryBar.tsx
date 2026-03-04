@@ -64,7 +64,7 @@ export function QueryHistoryBar({ groups, activeQueryId, onSelectQuery }: QueryH
   if (groups.length === 0) return null;
 
   return (
-    <div className="group/bar border-border/60 bg-muted/20 relative flex h-10 shrink-0 items-center border-b">
+    <div className="group/bar bg-muted/20 relative flex h-10 shrink-0 items-center">
       {/* Seta esquerda */}
       <button
         onClick={() => scroll('left')}

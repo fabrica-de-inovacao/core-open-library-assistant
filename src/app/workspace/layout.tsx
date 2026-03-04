@@ -8,14 +8,16 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   return (
     <SessionProvider>
       <TooltipProvider>
-        <SidebarProvider>
+        <SidebarProvider className="h-svh overflow-hidden">
           {/* Suspense isola o acesso dinâmico a cookies (estado da sidebar) do shell estático PPR */}
           <Suspense fallback={<div style={{ width: '13rem' }} />}>
             <AppSidebar />
           </Suspense>
           {/* Suspense isola sub-rotas dinâmicas (connection()) do shell estático PPR */}
           <Suspense fallback={null}>
-            <main className="bg-background flex min-h-screen w-full flex-col">{children}</main>
+            <main className="bg-background flex h-full w-full flex-col overflow-hidden">
+              {children}
+            </main>
           </Suspense>
         </SidebarProvider>
       </TooltipProvider>

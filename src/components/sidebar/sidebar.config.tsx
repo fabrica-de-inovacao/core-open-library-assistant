@@ -11,5 +11,5 @@ export interface NavRoute {
 
 export const NAV_ROUTES: NavRoute[] = [
   { href: '/workspace', label: 'Workspace', icon: <BookOpenText size={15} />, exact: true },
-  { href: '/workspace/history', label: 'Histórico', icon: <Clock size={15} /> },
+  { href: '/workspace/history', label: 'Minhas Revisões', icon: <Clock size={15} /> },
 ];

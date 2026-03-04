@@ -63,10 +63,13 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
 
         const originalCombined = rawQueries.join(' | ');
         const expandedCombined = finalQueries.join(' | ');
+        // O LLM sempre passa rawQueries=[] conforme instruído, logo originalCombined seria "".
+        // Usa `topic` como fallback para que o Inngest RelevanceGate tenha contexto real.
+        const storedOriginalQuery = originalCombined || topic || '';
         const [insertedQuery] = await db
           .insert(searchQueries)
           .values({
-            originalQuery: originalCombined,
+            originalQuery: storedOriginalQuery,
             expandedQuery: expandedCombined !== originalCombined ? expandedCombined : null,
             status: 'proposed',
             userId: ctx.sessionUserId,

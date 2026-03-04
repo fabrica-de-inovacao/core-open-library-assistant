@@ -7,6 +7,8 @@ import { articles, searchQueries, chatSessions } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { saveChatMessages } from '@/server/actions/chat';
 import { logger } from '@/lib/logger';
+import { runRouterAgent, type RouteIntent } from '@/server/agents/router-agent';
+import type { SynthesisDepth } from '@/server/agents/synthesis-agent';
 import {
   buildProposeSearchSolDatabaseTool,
   buildProposeSearchGlobalDatabaseTool,
@@ -182,6 +184,43 @@ async function compressHistoryIfNeeded(
   };
 }
 
+// ─── Fase A (IA-01): Routing Instructions ────────────────────────────────────
+/**
+ * Gera a instrução de roteamento injetada no system prompt.
+ * Calibra o comportamento do orquestrador com base na intenção detectada pelo RouterAgent.
+ * Apenas para a primeira interação — follow-ups não recebem override.
+ */
+function buildRoutingInstruction(intent: RouteIntent, isFirstInteraction: boolean): string {
+  if (!isFirstInteraction) return '';
+
+  if (intent === 'conversational') {
+    return `
+
+**[ROTEAMENTO AUTOMÁTICO — MODO CONVERSACIONAL]**
+A intenção detectada é CONVERSACIONAL: o usuário fez uma pergunta factual, pediu uma definição ou está em saudação/conversa geral.
+REGRAS ESPECÍFICAS PARA ESTA INTERAÇÃO:
+- NÃO chame nenhuma ferramenta de busca automaticamente.
+- Responda diretamente com seu conhecimento, de forma clara e concisa (2-4 parágrafos no máximo).
+- Se a resposta naturalmente se beneficiaria de literatura acadêmica, ao final ofereça: "Quer que eu busque artigos sobre X?".
+- NÃO inicie busca sem confirmação explícita do usuário.`;
+  }
+
+  if (intent === 'quick_lookup') {
+    return `
+
+**[ROTEAMENTO AUTOMÁTICO — MODO BUSCA RÁPIDA]**
+A intenção detectada é BUSCA RÁPIDA: o usuário quer referências ou artigos sobre um tema de forma pontual.
+REGRAS ESPECÍFICAS PARA ESTA INTERAÇÃO:
+- Chame \`propose_search_sol_database\` normalmente.
+- Após retorno da ferramenta, escreva APENAS uma frase curta de confirmação.
+- Quando o usuário solicitar a síntese, ela será gerada em formato CONCISO (sem seções de gaps, sem tabela completa) — isso é esperado e correto para o modo rápido.
+- Se o usuário quiser uma análise mais completa, ele pode solicitar explicitamente.`;
+  }
+
+  // systematic_review: comportamento padrão — não injeta nada especial
+  return '';
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
@@ -189,7 +228,13 @@ export async function POST(req: Request) {
   const session = await auth();
   const sessionUserId = session?.user?.id ?? null;
 
-  const { messages, queryId, chatId, modelId: requestedModelId } = await req.json();
+  const {
+    messages,
+    queryId,
+    chatId,
+    modelId: requestedModelId,
+    userSynthesisMode,
+  } = await req.json();
 
   // Fase 1 (P-01): Garante que a chat_session existe no DB para o chatId recebido.
   // O cliente gera o UUID localmente (otimista) e a primeira request cria o registro.
@@ -375,7 +420,38 @@ ${bibliographySummary || 'Nenhum artigo listado.'}`;
   const modelMessages = await convertToModelMessages(compressedMessages);
 
   const lastUserText = modifiedMessages.at(-1)?.parts?.find((p: any) => p.type === 'text');
-  logger.debug('[Chat] last user msg  :', (lastUserText as any)?.text?.slice?.(0, 120));
+  const lastUserTextStr = (lastUserText as any)?.text ?? '';
+  logger.debug('[Chat] last user msg  :', lastUserTextStr.slice(0, 120));
+
+  // ── Fase A (IA-01): RouterAgent ─────────────────────────────────────────────
+  // Classifica a intenção do input para calibrar profundidade da síntese.
+  // Roda na primeira interação (sem busca ativa) ou quando o usuário faz override.
+  // Em follow-ups com queryId ativo, mantém 'full' para não degradar a experiência.
+  let routeIntent: RouteIntent = 'systematic_review';
+  let synthesisDepth: SynthesisDepth = 'full';
+  const isFirstInteraction = messages.length === 1;
+  const hasUserOverride = !!userSynthesisMode;
+
+  if (lastUserTextStr && (isFirstInteraction || hasUserOverride)) {
+    try {
+      const routeResult = await runRouterAgent(
+        lastUserTextStr,
+        (userSynthesisMode as 'quick' | 'systematic' | null) ?? null
+      );
+      routeIntent = routeResult.intent;
+      synthesisDepth = routeResult.synthesisDepth;
+      logger.info(
+        `[Chat] 🧭 routing: intent=${routeIntent} | depth=${synthesisDepth} | confidence=${routeResult.confidence} | "${routeResult.reasoning}"`
+      );
+    } catch (err) {
+      logger.warn('[Chat] RouterAgent falhou — mantendo depth=full:', err);
+    }
+  } else {
+    logger.debug('[Chat] 🧭 routing: skipped (follow-up) — depth=full');
+  }
+
+  // Instrução de roteamento injetada no system prompt — calibra o comportamento do orquestrador
+  const routingInstruction = buildRoutingInstruction(routeIntent, isFirstInteraction);
 
   // Contadores de chunk para diagnóstico — reiniciados a cada request
   const chunkStats: Record<string, number> = {};
@@ -443,7 +519,7 @@ ${bibliographySummary || 'Nenhum artigo listado.'}`;
         logger.debug('[Chat] step text preview:', step.text.slice(0, 200));
       }
     },
-    system: systemPromptOverride + fallbackInstruction,
+    system: systemPromptOverride + fallbackInstruction + routingInstruction,
     // P-07: Tool handlers extraídos para server/tools/ (SRP).
     // Cada builder recebe o contexto da request (userId/chatId) via closure.
     tools: {
@@ -457,6 +533,7 @@ ${bibliographySummary || 'Nenhum artigo listado.'}`;
         sessionUserId,
         chatId,
         queryId,
+        synthesisDepth,
       }),
     } as any,
     onFinish: async (event) => {

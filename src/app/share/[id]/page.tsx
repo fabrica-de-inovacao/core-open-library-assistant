@@ -1,3 +1,4 @@
+import { connection } from 'next/server';
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
@@ -13,6 +14,7 @@ interface SharePageProps {
 }
 
 export async function generateMetadata({ params }: SharePageProps): Promise<Metadata> {
+  await connection();
   const { id } = await params;
   const query = await db
     .select({ originalQuery: searchQueries.originalQuery })
@@ -28,6 +30,7 @@ export async function generateMetadata({ params }: SharePageProps): Promise<Meta
 }
 
 export default async function SharePage({ params }: SharePageProps) {
+  await connection();
   const { id } = await params;
 
   // Carregar query

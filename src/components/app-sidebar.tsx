@@ -12,7 +12,7 @@ import {
   SidebarMenu,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { BookOpenText, PanelLeftClose, Plus } from 'lucide-react';
+import { BookOpenText, MessagesSquare, PanelLeftClose, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
@@ -82,20 +82,20 @@ export function AppSidebar() {
         </SidebarHeader>
 
         {/* ── Content ── */}
-        <SidebarContent className="gap-0 overflow-x-hidden px-2 py-2 group-data-[collapsible=icon]:px-0">
+        <SidebarContent className="gap-0 overflow-x-hidden px-2.5 py-3 group-data-[collapsible=icon]:px-0">
           {/* ── Zona primária: ação + nav principal ─────────────────────────
               Fundo levemente elevado para criar hierarquia visual clara.
               No modo colapsado (icon only) remove o padding lateral. */}
-          <div className="bg-sidebar-accent/20 mb-1.5 rounded-lg p-1.5 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:px-0">
+          <div className="bg-sidebar-accent/20 mb-2 rounded-lg p-2.5 group-data-[collapsible=icon]:rounded-none group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:px-0">
             {/* CTA — Nova Sessão */}
-            <div className="pb-1 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:pb-2">
+            <div className="pb-2 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:pb-2">
               {/* open={undefined} quando collapsed = Radix gerencia; open={false} quando expanded = nunca mostra */}
               <Tooltip open={state === 'collapsed' ? undefined : false}>
                 <TooltipTrigger asChild>
                   <Link
                     href="/workspace"
                     className={cn(
-                      'flex h-8 w-full items-center justify-center gap-2 rounded-md',
+                      'flex h-9 w-full items-center justify-center gap-2 rounded-md',
                       'bg-background/70 border-border/50 text-sidebar-foreground/70 border text-[13px] font-medium',
                       'hover:bg-background hover:border-border hover:text-sidebar-foreground transition-colors duration-100',
                       'group-data-[collapsible=icon]:border-border/60 group-data-[collapsible=icon]:bg-background group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:border group-data-[collapsible=icon]:px-0'
@@ -114,7 +114,7 @@ export function AppSidebar() {
             {/* Nav principal */}
             <SidebarGroup className="p-0">
               <SidebarGroupContent>
-                <SidebarMenu className="gap-0.5">
+                <SidebarMenu className="gap-1">
                   {NAV_ROUTES.map((route) => (
                     <NavItem
                       key={route.href}
@@ -134,7 +134,7 @@ export function AppSidebar() {
               Sem fundo especial — fica visivelmente mais leve que a zona
               primária, criando hierarquia por contraste. */}
           <SidebarGroup className="p-0 group-data-[collapsible=icon]:hidden">
-            <SidebarGroupLabel className="text-sidebar-foreground/30 px-1.5 pt-1 pb-1 text-[9.5px] font-semibold tracking-[0.12em] uppercase">
+            <SidebarGroupLabel className="text-sidebar-foreground/30 px-1.5 pt-2 pb-1.5 text-[9.5px] font-semibold tracking-[0.12em] uppercase">
               Recentes
             </SidebarGroupLabel>
             <SidebarGroupContent>
@@ -153,9 +153,16 @@ export function AppSidebar() {
                     />
                   ))
                 ) : (
-                  <p className="text-sidebar-foreground/25 px-2 py-2 text-[11px]">
-                    Nenhuma sessão recente
-                  </p>
+                  <div className="flex flex-col items-center gap-2 px-2 py-6 text-center">
+                    <div className="bg-sidebar-accent/60 flex size-9 items-center justify-center rounded-full">
+                      <MessagesSquare size={16} className="text-sidebar-foreground/25" />
+                    </div>
+                    <p className="text-sidebar-foreground/30 text-[11px] leading-snug">
+                      Nenhuma sessão ainda.
+                      <br />
+                      Inicie uma nova busca.
+                    </p>
+                  </div>
                 )}
               </SidebarMenu>
             </SidebarGroupContent>
@@ -164,7 +171,7 @@ export function AppSidebar() {
         </SidebarContent>
 
         {/* ── Footer ── */}
-        <SidebarFooter className="border-sidebar-border/60 border-t p-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0">
+        <SidebarFooter className="border-sidebar-border/60 border-t p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0">
           <UserMenuPopover />
         </SidebarFooter>
       </Sidebar>

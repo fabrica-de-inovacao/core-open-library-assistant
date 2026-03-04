@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Ellipsis, PencilLine, Share2, Trash2 } from 'lucide-react';
+import { AlertTriangle, Ellipsis, PencilLine, Share2, Trash2 } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,7 +24,7 @@ export function RecentChatsSkeleton() {
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="px-1 py-0.5">
           <Skeleton
-            className="h-7 w-full rounded-lg opacity-60"
+            className="h-8 w-full rounded-lg opacity-60"
             style={{ animationDelay: `${i * 80}ms` }}
           />
         </div>
@@ -46,6 +46,7 @@ export interface RecentChatItemProps {
 export function RecentChatItem({ chat, active, onShare, onRename, onDelete }: RecentChatItemProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [draft, setDraft] = useState(chat.title ?? '');
   const [hovered, setHovered] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -131,32 +132,69 @@ export function RecentChatItem({ chat, active, onShare, onRename, onDelete }: Re
               align="start"
               sideOffset={4}
               className="animate-in fade-in-0 zoom-in-95 w-44 duration-100"
+              onCloseAutoFocus={() => setConfirmingDelete(false)}
             >
-              <DropdownMenuItem
-                onClick={() => {
-                  setMenuOpen(false);
-                  onShare();
-                }}
-                className="cursor-pointer gap-2 text-[13px]"
-              >
-                <Share2 size={14} className="text-muted-foreground" />
-                Compartilhar
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={startRename} className="cursor-pointer gap-2 text-[13px]">
-                <PencilLine size={14} className="text-muted-foreground" />
-                Renomear
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => {
-                  setMenuOpen(false);
-                  onDelete();
-                }}
-                className="text-destructive focus:bg-destructive/10 focus:text-destructive cursor-pointer gap-2 text-[13px]"
-              >
-                <Trash2 size={14} className="text-destructive" />
-                Excluir sessão
-              </DropdownMenuItem>
+              {confirmingDelete ? (
+                <div className="px-2 py-2">
+                  <div className="mb-2.5 flex items-start gap-2">
+                    <AlertTriangle size={14} className="text-destructive mt-0.5 shrink-0" />
+                    <p className="text-foreground text-[12px] leading-snug">
+                      Excluir esta sessão? Esta ação não pode ser desfeita.
+                    </p>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingDelete(false)}
+                      className="border-border text-muted-foreground hover:bg-muted flex-1 rounded border px-2 py-1 text-[11px] transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setConfirmingDelete(false);
+                        onDelete();
+                      }}
+                      className="bg-destructive hover:bg-destructive/90 flex-1 rounded px-2 py-1 text-[11px] font-medium text-white transition-colors"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onShare();
+                    }}
+                    className="cursor-pointer gap-2 text-[13px]"
+                  >
+                    <Share2 size={14} className="text-muted-foreground" />
+                    Compartilhar
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={startRename}
+                    className="cursor-pointer gap-2 text-[13px]"
+                  >
+                    <PencilLine size={14} className="text-muted-foreground" />
+                    Renomear
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setConfirmingDelete(true);
+                    }}
+                    className="text-destructive focus:bg-destructive/10 focus:text-destructive cursor-pointer gap-2 text-[13px]"
+                  >
+                    <Trash2 size={14} className="text-destructive" />
+                    Excluir sessão
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}

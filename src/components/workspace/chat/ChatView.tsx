@@ -1,0 +1,362 @@
+'use client';
+
+/**
+ * components/workspace/chat/ChatView.tsx
+ *
+ * Vista completa da sessão de chat activa.
+ * Contém tudo que é específico do modo conversa:
+ *  - scroll (ref + botão)
+ *  - highlightedRow (sincronização com ExtractionsPanel)
+ *  - isPanelOpen (painel lateral de extrações)
+ *  - input + submit (envio de mensagens)
+ *  - chips de sugestão rápida
+ *  - QueryHistoryBar + lista de mensagens + TypingIndicator
+ *  - ResizablePanelGroup com ChatInputBar e ExtractionsPanel
+ *  - AttachDialog (versão expandida — usada só no chat)
+ *
+ * O que NÃO está aqui:
+ *  - Lógica de auth (vem do page.tsx via props)
+ *  - Lógica de settings (model/limit — vem via props)
+ *  - useChatOrchestration / useAttachments (instanciados no page.tsx)
+ */
+
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { signIn } from 'next-auth/react';
+import { ChevronsDown, ChevronLeft, BookOpen } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { usePanelRef } from 'react-resizable-panels';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { ChatMessageItem, TypingIndicator } from '@/components/workspace/ChatMessageItem';
+import { ExtractionsPanel } from '@/components/workspace/ExtractionsPanel';
+import { QueryHistoryBar } from '@/components/workspace/QueryHistoryBar';
+import { ChatInputBar } from '@/components/workspace/ChatInputBar';
+import { AttachContent } from '@/components/workspace/AttachContent';
+import { useSidebar } from '@/components/ui/sidebar';
+import type { useChatOrchestration } from '@/hooks/useChatOrchestration';
+import type { useAttachments } from '@/hooks/useAttachments';
+
+// ---------------------------------------------------------------------------
+// Tipos
+// ---------------------------------------------------------------------------
+
+interface ChatViewProps {
+  /** Sessão do utilizador (para exibir o nome no avatar das mensagens) */
+  userName: string | null | undefined;
+  /** Status de autenticação — necessário para guard no submit */
+  authStatus: 'authenticated' | 'unauthenticated' | 'loading';
+  /** Resultado completo de useChatOrchestration — instanciado no page.tsx */
+  orchestration: ReturnType<typeof useChatOrchestration>;
+  /** Resultado completo de useAttachments — instanciado no page.tsx */
+  attachments: ReturnType<typeof useAttachments>;
+  /** Limite de artigos por busca */
+  searchLimit: 10 | 25;
+  onSearchLimitChange: (v: 10 | 25) => void;
+  /** Modelo de IA — selector compacto no ChatInputBar */
+  modelId?: import('@/hooks/useSearchSettings').ModelValue;
+  onModelChange?: (m: import('@/hooks/useSearchSettings').ModelValue) => void;
+  /** Abre modal de login — recebe o texto pendente para retomar após login */
+  onShowLoginModal?: (pendingText?: string) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Componente
+// ---------------------------------------------------------------------------
+
+export function ChatView({
+  userName,
+  authStatus,
+  orchestration,
+  attachments,
+  searchLimit,
+  onSearchLimitChange,
+  modelId,
+  onModelChange,
+  onShowLoginModal,
+}: ChatViewProps) {
+  const {
+    displayMessages,
+    sendMessage,
+    stop,
+    isLoading,
+    activeQueryId,
+    handleExecuteSearch,
+    handleCancelSearch,
+    executedProposalIds,
+    runningSearches,
+    articles,
+    queryGroups,
+    hasZeroResults,
+    isSearchRunning,
+    realtimeStatus,
+    suggestionChips,
+    clearSuggestionChips,
+    // Fase C (IA-04): modo de síntese
+    synthesisMode,
+    setSynthesisMode,
+  } = orchestration;
+
+  // ── Painel lateral de extrações ─────────────────────────────────────────
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const { setOpen: setSidebarOpen, isMobile } = useSidebar();
+  // usePanelRef é a API imperativa do react-resizable-panels v4
+  const mainPanelRef = usePanelRef();
+  const extractionsPanelRef = usePanelRef();
+
+  // Auto-abre quando chegam artigos pela primeira vez
+  const { hasArticles } = orchestration;
+  useEffect(() => {
+    if (hasArticles && !isPanelOpen) {
+      setIsPanelOpen(true);
+      // Recolhe a sidebar para dar espaço ao painel do acervo (só em desktop)
+      if (!isMobile) setSidebarOpen(false);
+      // Duplo rAF garante que o painel já está no DOM antes do expand
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          extractionsPanelRef.current?.expand();
+          mainPanelRef.current?.resize('58');
+        })
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasArticles]);
+
+  // ── Scroll ───────────────────────────────────────────────────────────────
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  // Scroll automático quando chegam mensagens novas
+  useEffect(() => {
+    if (displayMessages.length > 0) scrollToBottom();
+  }, [displayMessages.length, scrollToBottom]);
+
+  // Detecta distância do fundo para exibir botão de scroll
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      setShowScrollButton(el.scrollHeight - el.scrollTop - el.clientHeight > 200);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // ── Highlighted row (G-03 — sincroniza com ExtractionsPanel) ─────────────
+  const [highlightedRow, setHighlightedRow] = useState<string | null>(null);
+
+  // ── Input ────────────────────────────────────────────────────────────────
+  const [input, setInput] = useState('');
+  const handleInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setInput(e.target.value),
+    []
+  );
+
+  // ── Submit ───────────────────────────────────────────────────────────────
+  const handleSubmit = useCallback(
+    (e?: React.FormEvent<HTMLFormElement>) => {
+      e?.preventDefault();
+      if (authStatus === 'unauthenticated') {
+        if (onShowLoginModal) {
+          onShowLoginModal(input.trim() || undefined);
+        } else {
+          void signIn('google', { callbackUrl: '/workspace' });
+        }
+        return;
+      }
+      if (!input.trim()) return;
+      clearSuggestionChips();
+      sendMessage({ text: input });
+      setInput('');
+      attachments.clearChips();
+    },
+    [authStatus, input, onShowLoginModal, sendMessage, clearSuggestionChips, attachments]
+  );
+
+  // ── Chips de sugestão rápida ─────────────────────────────────────────────
+  const chipsList = useMemo(() => suggestionChips ?? [], [suggestionChips]);
+  const handleSuggestionClick = useCallback((text: string) => setInput(text), []);
+
+  // ── Navegação no histórico de queries ────────────────────────────────────
+  const handleSelectQuery = useCallback((queryId: string) => {
+    document
+      .querySelector(`[data-query-id="${queryId}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  // =========================================================================
+  // Render
+  // =========================================================================
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        {/* ── Painel principal ── */}
+        <ResizablePanel
+          panelRef={mainPanelRef}
+          defaultSize="100"
+          minSize="30"
+          style={{ transition: 'flex 380ms cubic-bezier(0.16, 1, 0.3, 1)' }}
+        >
+          <div className="relative flex h-full flex-col">
+            {/* Histórico de queries */}
+            {queryGroups.length > 0 && (
+              <QueryHistoryBar
+                groups={queryGroups}
+                activeQueryId={activeQueryId}
+                onSelectQuery={handleSelectQuery}
+              />
+            )}
+
+            {/* Lista de mensagens */}
+            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto py-6">
+              <div className="mx-auto max-w-3xl space-y-4 px-4">
+                {displayMessages.map((msg) => (
+                  <ChatMessageItem
+                    key={msg.id}
+                    m={msg}
+                    setHighlightedRow={setHighlightedRow}
+                    articles={articles}
+                    isStreaming={
+                      isLoading && msg.id === displayMessages.at(-1)?.id && msg.role === 'assistant'
+                    }
+                    userName={userName}
+                    onExecuteSearch={handleExecuteSearch}
+                    onCancelSearch={handleCancelSearch}
+                    executedProposalIds={executedProposalIds}
+                    runningSearches={runningSearches}
+                  />
+                ))}
+                {isLoading && displayMessages.at(-1)?.role !== 'assistant' && <TypingIndicator />}
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
+
+            {/* Botão de scroll para baixo */}
+            {showScrollButton && (
+              <button
+                onClick={scrollToBottom}
+                className="group/scroll border-border/30 bg-background/40 hover:bg-background/80 absolute bottom-38 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0 rounded-full border px-3 py-2 shadow-md backdrop-blur-md transition-all duration-300"
+                aria-label="Rolar para o fim"
+              >
+                <ChevronsDown className="text-foreground/60 group-hover/scroll:text-foreground h-4 w-4 shrink-0 transition-colors duration-300" />
+                <span className="text-foreground/80 max-w-0 overflow-hidden text-xs font-medium whitespace-nowrap transition-all duration-300 group-hover/scroll:max-w-[12rem]">
+                  Rolar para o fim
+                </span>
+              </button>
+            )}
+
+            {/* Barra de input */}
+            <ChatInputBar
+              input={input}
+              onInputChange={handleInputChange}
+              onSubmit={handleSubmit}
+              showAbortButton={isLoading}
+              onAbort={stop}
+              suggestionChips={chipsList}
+              onSuggestionClick={handleSuggestionClick}
+              attachments={attachments}
+              searchLimit={searchLimit}
+              onSearchLimitChange={onSearchLimitChange}
+              modelId={modelId}
+              onModelChange={onModelChange}
+              synthesisMode={synthesisMode}
+              onSynthesisModeChange={setSynthesisMode}
+            />
+          </div>
+        </ResizablePanel>
+
+        {/* ── Painel lateral de extrações ── sempre montado quando há artigos ── */}
+        {hasArticles && (
+          <>
+            <ResizableHandle withHandle />
+            <ResizablePanel
+              panelRef={extractionsPanelRef}
+              defaultSize="0"
+              minSize="35"
+              maxSize="65"
+              collapsible
+              collapsedSize="0"
+              style={{ transition: 'flex 380ms cubic-bezier(0.16, 1, 0.3, 1)' }}
+              onResize={(size) => setIsPanelOpen(size.asPercentage > 1)}
+            >
+              <ExtractionsPanel
+                articles={articles}
+                activeQueryId={activeQueryId}
+                highlightedRow={highlightedRow}
+                hasZeroResults={hasZeroResults}
+                isSearchRunning={isSearchRunning}
+                realtimeStatus={realtimeStatus}
+                onCollapse={() => extractionsPanelRef.current?.collapse()}
+                onCancelSearch={handleCancelSearch}
+              />
+            </ResizablePanel>
+          </>
+        )}
+      </ResizablePanelGroup>
+
+      {/* ── Aba lateral para re-abrir o painel do acervo ── */}
+      {!isPanelOpen && hasArticles && (
+        <button
+          onClick={() => {
+            extractionsPanelRef.current?.expand();
+            mainPanelRef.current?.resize('58');
+          }}
+          className="group/tab border-border/60 bg-background hover:bg-muted hover:border-primary/40 absolute top-1/2 right-0 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-2 rounded-l-xl border border-r-0 px-2.5 py-4 shadow-md transition-all"
+          aria-label="Abrir painel do acervo"
+        >
+          <ChevronLeft className="text-muted-foreground group-hover/tab:text-primary h-3.5 w-3.5 shrink-0 transition-colors" />
+          <BookOpen className="text-muted-foreground group-hover/tab:text-primary h-4 w-4 shrink-0 transition-colors" />
+          <span className="text-muted-foreground group-hover/tab:text-primary rotate-180 text-[10px] font-medium tracking-widest uppercase transition-colors [writing-mode:vertical-rl]">
+            Acervo
+          </span>
+        </button>
+      )}
+
+      {/* ── Dialog de anexo — fora do ResizablePanelGroup para não interferir no layout ── */}
+      <Dialog
+        open={attachments.isAttachDialogOpen}
+        onOpenChange={attachments.setIsAttachDialogOpen}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Adicionar Referência</DialogTitle>
+            <DialogDescription>
+              Faça upload de um PDF ou adicione um DOI para incluir no contexto da conversa.
+            </DialogDescription>
+          </DialogHeader>
+          <AttachContent
+            variant="full"
+            uploadState={attachments.uploadState}
+            doiInput={attachments.doiInput}
+            doiState={attachments.doiState}
+            isDropZoneActive={attachments.isDropZoneActive}
+            onDropZoneDragOver={(e) => {
+              e.stopPropagation();
+              attachments.setIsDropZoneActive(true);
+            }}
+            onDropZoneDragLeave={() => attachments.setIsDropZoneActive(false)}
+            onDropZoneDrop={(e) => {
+              attachments.setIsDropZoneActive(false);
+              Array.from(e.dataTransfer.files)
+                .filter((f) => f.type === 'application/pdf')
+                .forEach((f) => attachments.submitPdfFile(f));
+              attachments.setIsAttachDialogOpen(false);
+            }}
+            onDropZoneClick={() => attachments.fileInputRef.current?.click()}
+            onDoiChange={(val) => attachments.setDoiInput(val)}
+            onDoiSubmit={attachments.handleDoiSubmit}
+          />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

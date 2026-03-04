@@ -37,6 +37,15 @@ const USER_AGENT = 'SOLAssistant/1.0 (mailto:dev@solassistant.app)';
 // ID do campo Computer Science no OpenAlex: https://api.openalex.org/fields/17
 const CS_FIELD_ID = '17';
 
+// IDs dos publishers no OpenAlex — verificar em https://api.openalex.org/publishers?search=<nome>
+// ACM  (Association for Computing Machinery):        P4310319798  → 164 k works
+// IEEE (Institute of Electrical and Electronics):    P4310319808  → 1,47 M works
+//       (cobre todas as IEEE societies via lineage, ex: IEEE Computer Society P4310320439)
+// Springer Nature (grupo pai):                       P4310319965  → 2,75 M works
+//       (cobre Springer Nature Netherlands P4310320108 via lineage)
+const PUBLISHER_FILTER =
+  'primary_location.source.host_organization_lineage:P4310319798|P4310319808|P4310319965';
+
 /**
  * Normaliza a query antes de enviar ao OpenAlex.
  * Principal problema: o LLM às vezes gera `""Termo""` (double-double-quotes)
@@ -75,16 +84,17 @@ function buildFallbackQuery(query: string): string | null {
 async function doOpenAlexFetch(
   query: string,
   filterCS: boolean,
-  attempt: number
+  attempt: number,
+  perPage: number = 25
 ): Promise<{ articles: MappedArticle[]; totalCount: number }> {
-  const filters: string[] = ['type:article'];
+  const filters: string[] = ['type:article', PUBLISHER_FILTER];
   if (filterCS) filters.push(`topics.field.id:${CS_FIELD_ID}`);
 
   const url =
     `https://api.openalex.org/works` +
     `?search=${encodeURIComponent(query)}` +
     `&filter=${filters.join(',')}` +
-    `&per-page=25` +
+    `&per-page=${perPage}` +
     `&select=${OPENALEX_SELECT}`;
 
   logger.log(`[GlobalSearch] 🌐 OpenAlex tentativa ${attempt} | CS=${filterCS} | ${url}`);
@@ -158,16 +168,19 @@ async function doOpenAlexFetch(
  * Isso resolve o problema de queries como `"Mermãs Digitais" AND (...)` que
  * retornam 0 resultados porque o nome próprio não existe na literatura indexada.
  */
-async function fetchOpenAlexWorks(query: string): Promise<MappedArticle[]> {
+async function fetchOpenAlexWorks(
+  query: string,
+  articleLimit: number = 25
+): Promise<MappedArticle[]> {
   const cleanQuery = normalizeOpenAlexQuery(query);
   logger.log(`[GlobalSearch] Query normalizada: "${cleanQuery}"`);
 
   // Tentativa 1: com filtro CS
-  const attempt1 = await doOpenAlexFetch(cleanQuery, true, 1);
+  const attempt1 = await doOpenAlexFetch(cleanQuery, true, 1, articleLimit);
   if (attempt1.articles.length > 0) return attempt1.articles;
 
   // Tentativa 2: sem filtro CS (mesma query, mais abrangente)
-  const attempt2 = await doOpenAlexFetch(cleanQuery, false, 2);
+  const attempt2 = await doOpenAlexFetch(cleanQuery, false, 2, articleLimit);
   if (attempt2.articles.length > 0) return attempt2.articles;
 
   // Tentativa 3: fallback removendo nomes próprios não-ASCII + filtro CS
@@ -175,11 +188,11 @@ async function fetchOpenAlexWorks(query: string): Promise<MappedArticle[]> {
   if (fallbackQuery) {
     logger.log(`[GlobalSearch] 🔄 Fallback query (sem nomes próprios): "${fallbackQuery}"`);
 
-    const attempt3 = await doOpenAlexFetch(fallbackQuery, true, 3);
+    const attempt3 = await doOpenAlexFetch(fallbackQuery, true, 3, articleLimit);
     if (attempt3.articles.length > 0) return attempt3.articles;
 
     // Tentativa 4: fallback sem filtro CS
-    const attempt4 = await doOpenAlexFetch(fallbackQuery, false, 4);
+    const attempt4 = await doOpenAlexFetch(fallbackQuery, false, 4, articleLimit);
     if (attempt4.articles.length > 0) return attempt4.articles;
   }
 
@@ -227,6 +240,10 @@ export async function GET(request: Request) {
     let queryId = searchParams.get('query_id');
     const userId = session?.user?.id ?? null;
 
+    // Fase 7 (P-settings): respeita limite de artigos configurado pelo usuário
+    const rawLimit = Number(searchParams.get('limit') ?? '25');
+    const articleLimit = [10, 25].includes(rawLimit) ? rawLimit : 25;
+
     logger.log(
       `[GlobalSearch] ⚡ Nova busca global | query: "${q}" | queryId: ${queryId ?? 'novo'} | userId: ${userId ?? 'anon'}`
     );
@@ -255,7 +272,7 @@ export async function GET(request: Request) {
     // 2. Fetch from OpenAlex
     let allResults: MappedArticle[] = [];
     try {
-      allResults = await fetchOpenAlexWorks(q);
+      allResults = await fetchOpenAlexWorks(q, articleLimit);
     } catch (fetchError) {
       logger.warn(
         `[GlobalSearch] ❌ Falha ao buscar no OpenAlex: ${(fetchError as Error).message}`
@@ -270,6 +287,12 @@ export async function GET(request: Request) {
         { status: 502 }
       );
     }
+
+    // Garante que o número de resultados não ultrapassa o limite configurado pelo usuário
+    allResults = allResults.slice(0, articleLimit);
+    logger.log(
+      `[GlobalSearch] 📊 Limite aplicado: ${articleLimit} | Resultados: ${allResults.length}`
+    );
 
     // 3. DOI deduplication — reuse already-processed articles to avoid redundant extraction
     const newArticleIds: string[] = [];

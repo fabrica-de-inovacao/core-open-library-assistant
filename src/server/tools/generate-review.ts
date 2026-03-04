@@ -10,7 +10,7 @@ import { articles, searchQueries } from '@/server/db/schema';
 import { eq, inArray } from 'drizzle-orm';
 import { rankArticles } from '@/lib/reranking';
 import { runRerankerAgent } from '@/server/agents/reranker-agent';
-import { runSynthesisAgent } from '@/server/agents/synthesis-agent';
+import { runSynthesisAgent, type SynthesisDepth } from '@/server/agents/synthesis-agent';
 import { formatArticleReference } from '@/lib/mappers/article';
 import { logger } from '@/lib/logger';
 import type { ToolContext } from './propose-search';
@@ -18,6 +18,13 @@ import type { ToolContext } from './propose-search';
 interface ReviewToolContext extends ToolContext {
   /** queryId ativo da request (usado como fallback retrocompat sem chatId) */
   queryId: string | null;
+  /**
+   * Fase A (IA-01): profundidade de síntese determinada pelo RouterAgent.
+   * 'brief'    → 2-3 parágrafos (quick_lookup)
+   * 'standard' → TL;DR + Visão Geral + Tabela
+   * 'full'     → estrutura canônica completa (systematic_review)
+   */
+  synthesisDepth?: SynthesisDepth;
 }
 
 export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
@@ -96,7 +103,8 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
       try {
         const { review, citationMap, articleCount } = await runSynthesisAgent(
           finalRanked,
-          ctx.chatId ?? ctx.queryId ?? 'unknown'
+          ctx.chatId ?? ctx.queryId ?? 'unknown',
+          ctx.synthesisDepth ?? 'full'
         );
         return {
           success: true,

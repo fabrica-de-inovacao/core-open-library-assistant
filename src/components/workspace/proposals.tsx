@@ -52,11 +52,15 @@ export const SearchProposalCard = ({
 
   return (
     <div className="border-border bg-card mt-3 overflow-hidden rounded-xl border shadow-sm">
-      {/* Header clicável */}
-      <button
-        type="button"
+      {/* Header clicável — div em vez de button para evitar button>button inválido no HTML */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setIsExpanded(!isExpanded)}
-        className="border-border/60 bg-muted/30 hover:bg-muted/50 flex w-full items-center justify-between border-b px-4 py-2.5 transition-colors"
+        onKeyDown={(e) =>
+          e.key === 'Enter' || e.key === ' ' ? setIsExpanded(!isExpanded) : undefined
+        }
+        className="border-border/60 bg-muted/30 hover:bg-muted/50 flex w-full cursor-pointer items-center justify-between border-b px-4 py-2.5 transition-colors"
       >
         <div className="flex items-center gap-2">
           <Terminal className="text-primary h-3.5 w-3.5" />
@@ -100,7 +104,7 @@ export const SearchProposalCard = ({
             <ChevronDown className="text-muted-foreground h-3.5 w-3.5" />
           )}
         </div>
-      </button>
+      </div>
 
       {/* Strings editáveis */}
       {isExpanded && (
@@ -182,11 +186,15 @@ export const GlobalSearchProposalCard = ({
 
   return (
     <div className="bg-card mt-3 overflow-hidden rounded-xl border border-amber-200/60 shadow-sm dark:border-amber-800/40">
-      {/* Header */}
-      <button
-        type="button"
+      {/* Header — div em vez de button para evitar button>button inválido no HTML */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex w-full items-center justify-between border-b border-amber-200/40 bg-amber-50/60 px-4 py-2.5 transition-colors hover:bg-amber-50/80 dark:border-amber-800/30 dark:bg-amber-950/20 dark:hover:bg-amber-950/30"
+        onKeyDown={(e) =>
+          e.key === 'Enter' || e.key === ' ' ? setIsExpanded(!isExpanded) : undefined
+        }
+        className="flex w-full cursor-pointer items-center justify-between border-b border-amber-200/40 bg-amber-50/60 px-4 py-2.5 transition-colors hover:bg-amber-50/80 dark:border-amber-800/30 dark:bg-amber-950/20 dark:hover:bg-amber-950/30"
       >
         <div className="flex items-center gap-2">
           <Activity className="h-3.5 w-3.5 text-amber-500" />
@@ -229,7 +237,7 @@ export const GlobalSearchProposalCard = ({
             <ChevronDown className="text-muted-foreground h-3.5 w-3.5" />
           )}
         </div>
-      </button>
+      </div>
 
       {/* Query editável */}
       {isExpanded && (
