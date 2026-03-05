@@ -30,4 +30,4 @@ EXPOSE 8000
 #   MAX_CONCURRENT_EXTRACTIONS — semáforo de backpressure (padrão: 2 × EXTRACTION_WORKERS)
 #   OCR_PAGE_CHUNK_SIZE      — páginas por chunk no OCR (padrão: 10)
 #   WORKER_API_KEY           — token de autenticação
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS:-4}"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS:-1}"]

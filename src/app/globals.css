@@ -184,6 +184,19 @@
   }
 }
 
+/* PipelineStatusBar — barra de progresso indeterminado (fase searching / needs_refinement) */
+@keyframes progress-scan {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(200%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
+
 .marquee-track {
   animation: marquee 26s linear infinite;
 }

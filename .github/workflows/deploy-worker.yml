@@ -1,0 +1,42 @@
+name: Deploy Python Worker
+
+# Dispara ao fazer push na main com mudanças dentro de worker/
+# ou manualmente via "Run workflow" na aba Actions.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'worker/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy via SSH → DigitalOcean
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Deploy worker no droplet
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          port: ${{ secrets.DO_PORT }}
+          # Sequência de deploy:
+          #   1. Atualiza o código na branch main
+          #   2. Reconstrói apenas a imagem python-worker (sem afectar outros serviços)
+          #   3. Recria o container python-worker sem parar os demais
+          #   4. Exibe o status final para log da Action
+          script: |
+            set -e
+            cd ${{ secrets.DO_APP_DIR }}
+            echo "==> git pull"
+            git pull origin main
+            echo "==> docker compose build python-worker"
+            docker compose build --no-cache python-worker
+            echo "==> docker compose up python-worker"
+            docker compose up --no-deps -d python-worker
+            echo "==> status"
+            docker compose ps python-worker

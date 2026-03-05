@@ -322,6 +322,64 @@ export function useChatOrchestration({
     []
   );
 
+  // ── Auto-execute: nova proposta → executa sem aguardar clique do usuário ──
+  // Fase IA-04: elimina a camada redundante de confirmação manual ("Executar Busca").
+  // O card SearchProposalCard continua visível mas agora em modo informativo (somente leitura).
+  //
+  // pendingAutoExecuteRef é pré-populado com query_ids dos initialMessages para evitar
+  // re-execução de buscas antigas ao recarregar uma sessão do histórico no DB.
+  const pendingAutoExecuteRef = useRef<Set<string>>(
+    (() => {
+      const ids = new Set<string>();
+      for (const msg of initialMessages ?? []) {
+        for (const part of (msg as { parts?: unknown[] }).parts ?? []) {
+          if (!isToolOrDynamicToolUIPart(part)) continue;
+          const name = getToolOrDynamicToolName(part);
+          if (name !== 'propose_search_sol_database' && name !== 'propose_search_global_database')
+            continue;
+          if ((part as { state?: string }).state !== 'output-available') continue;
+          const raw = (part as { output?: Record<string, unknown> }).output;
+          const qId = (
+            raw?.type === 'json' ? (raw.value as Record<string, unknown>)?.query_id : raw?.query_id
+          ) as string | undefined;
+          if (qId) ids.add(qId);
+        }
+      }
+      return ids;
+    })()
+  );
+
+  useEffect(() => {
+    for (const msg of messages) {
+      for (const part of msg.parts ?? []) {
+        if (!isToolOrDynamicToolUIPart(part)) continue;
+        const toolName = getToolOrDynamicToolName(part);
+        if (
+          toolName !== 'propose_search_sol_database' &&
+          toolName !== 'propose_search_global_database'
+        )
+          continue;
+        if (part.state !== 'output-available') continue;
+        const rawOutput = (part as any).output;
+        const finalOutput: Record<string, unknown> | undefined =
+          rawOutput?.type === 'json' ? (rawOutput.value as Record<string, unknown>) : rawOutput;
+        const qId = finalOutput?.query_id as string | undefined;
+        if (!qId) continue;
+        if (executedProposalIds.has(qId) || pendingAutoExecuteRef.current.has(qId)) continue;
+
+        // Nova proposta não executada → auto-executar imediatamente
+        pendingAutoExecuteRef.current.add(qId);
+        const queries = Array.isArray(finalOutput?.queries)
+          ? (finalOutput.queries as string[])
+          : Array.isArray(finalOutput?.query)
+            ? [finalOutput.query as string]
+            : [];
+        void handleExecuteSearch(queries, qId, toolName === 'propose_search_global_database');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, executedProposalIds]);
+
   // ── URL Management ──────────────────────────────────────────────────────────
 
   const isClearingRef = useRef(false);
@@ -762,5 +820,8 @@ export function useChatOrchestration({
     // Fase C (IA-04): modo de síntese
     synthesisMode,
     setSynthesisMode,
+    // Status da query ativa no DB (done/needs_refinement/processing/etc.) — usado
+    // pelo PipelineStatusBar para feedback global step-by-step ao usuário.
+    queryStatus,
   };
 }

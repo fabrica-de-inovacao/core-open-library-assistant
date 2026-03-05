@@ -37,6 +37,7 @@ import { ExtractionsPanel } from '@/components/workspace/ExtractionsPanel';
 import { QueryHistoryBar } from '@/components/workspace/QueryHistoryBar';
 import { ChatInputBar } from '@/components/workspace/ChatInputBar';
 import { AttachContent } from '@/components/workspace/AttachContent';
+import { PipelineStatusBar } from '@/components/workspace/PipelineStatusBar';
 import { useSidebar } from '@/components/ui/sidebar';
 import type { useChatOrchestration } from '@/hooks/useChatOrchestration';
 import type { useAttachments } from '@/hooks/useAttachments';
@@ -99,6 +100,8 @@ export function ChatView({
     // Fase C (IA-04): modo de síntese
     synthesisMode,
     setSynthesisMode,
+    // P-StatusBar: status da query ativa no DB (done/needs_refinement/processing/etc.)
+    queryStatus,
   } = orchestration;
 
   // ── Painel lateral de extrações ─────────────────────────────────────────
@@ -253,6 +256,14 @@ export function ChatView({
                 </span>
               </button>
             )}
+
+            {/* Barra de status global do pipeline — P-StatusBar */}
+            <PipelineStatusBar
+              isSearchRunning={isSearchRunning}
+              articles={articles}
+              activeQueryId={activeQueryId}
+              queryStatus={queryStatus}
+            />
 
             {/* Barra de input */}
             <ChatInputBar
