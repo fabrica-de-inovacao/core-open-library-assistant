@@ -22,6 +22,82 @@ const QuerySchema = z.object({
   userId: z.string().optional(), // In production this would come from the session context
 });
 
+// Helper: busca uma página do SOL e retorna os resultados encontrados.
+// Isolado para permitir execução paralela via Promise.allSettled.
+async function fetchSOLPage(
+  q: string,
+  page: number
+): Promise<
+  Array<{
+    title: string;
+    authors: string;
+    year: number;
+    originalUrl: string;
+    sourceName: string;
+    doi: string | null;
+  }>
+> {
+  const searchUrl = `https://sol.sbc.org.br/busca/index.php/integrada/results?query=${encodeURIComponent(q)}&archiveIds%5B%5D=1&archiveIds%5B%5D=2&archiveIds%5B%5D=3&page=${page}`;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    const response = await fetch(searchUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+
+    if (!response.ok) {
+      console.warn(`[Search] ❌ SOL q="${q.slice(0, 30)}" pág.${page}: HTTP ${response.status}`);
+      return [];
+    }
+
+    const html = await response.text();
+    console.log(`[Search] 🌐 SOL q="${q.slice(0, 30)}" pág.${page} | HTML ${html.length} chars`);
+
+    const $ = cheerio.load(html);
+    const results: Array<{
+      title: string;
+      authors: string;
+      year: number;
+      originalUrl: string;
+      sourceName: string;
+      doi: string | null;
+    }> = [];
+
+    $('a.record_title').each((_, el) => {
+      const titleEl = $(el);
+      const title = titleEl.text().trim();
+      const url = titleEl.attr('href') || '';
+      const contents = titleEl.next('div.recordContents');
+      const authors = contents.find('span.author').text().trim();
+      const yearText = contents.find('span.list_record_date').text().trim();
+      const yearMatch = yearText.match(/\d{4}/);
+      const year = yearMatch ? parseInt(yearMatch[0], 10) : new Date().getFullYear();
+      const sourceName = contents.find('div.archive_serie').text().trim() || 'SBC OpenLib';
+      const doi = extractDoi(titleEl.text() + ' ' + url);
+      if (title && url) {
+        results.push({
+          title,
+          authors: authors || 'Desconhecido',
+          year,
+          originalUrl: url,
+          sourceName,
+          doi,
+        });
+      }
+    });
+
+    console.log(`[Search] 🔍 SOL q="${q.slice(0, 30)}" pág.${page}: ${results.length} artigo(s)`);
+    return results;
+  } catch (err) {
+    const isAbort = (err as Error).name === 'AbortError';
+    console.warn(
+      `[Search] ⏱️ SOL q="${q.slice(0, 30)}" pág.${page} ${isAbort ? 'timeout (20s)' : 'erro'}: ${(err as Error).message}`
+    );
+    return [];
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const session = await auth();
@@ -71,67 +147,14 @@ export async function GET(request: Request) {
     console.log(`[Search Trace] Referer:`, request.headers.get('referer'));
     console.log(`[Search Trace] User-Agent:`, request.headers.get('user-agent'));
 
-    // 1. Cache check — if this exact run was already processed, reuse it
-    const [existingQuery] = await db
-      .select({
-        id: searchQueries.id,
-        status: searchQueries.status,
-        originalQuery: searchQueries.originalQuery,
-      })
-      .from(searchQueries)
-      .where(eq(searchQueries.originalQuery, combinedQuery))
-      .limit(1);
+    // NOTA: O cache de query-level foi removido intencionalmente.
+    // Motivo: _checkAndMarkQueryDone marca 'done' mesmo quando todos os artigos são 'failed',
+    // o que fazia com que buscas com resultados ruins fossem reutilizadas indefinidamente.
+    // A deduplicação por DOI (abaixo, seção 3) continua ativa — artigos já processados
+    // individualmente são reutilizados sem re-extração. Isso é suficiente e seguro.
 
+    // 1. Determinar queryId
     let queryId = searchParams.get('query_id');
-
-    if (existingQuery && existingQuery.status === 'done') {
-      console.log(`[Search] ✅ Cache hit! Query existente: ${existingQuery.id}`);
-      const cachedArticles = await db
-        .select()
-        .from(articles)
-        .where(eq(articles.queryId, existingQuery.id));
-
-      let finalQueryId = existingQuery.id;
-
-      if (queryId && queryId !== existingQuery.id) {
-        console.log(
-          `[Search] 🔄 Copiando ${cachedArticles.length} artigos em cache para o novo queryId: ${queryId}`
-        );
-        if (cachedArticles.length > 0) {
-          await db.insert(articles).values(
-            cachedArticles.map((art) => ({
-              queryId: queryId as string,
-              doi: art.doi,
-              title: art.title,
-              authors: art.authors,
-              sourceName: art.sourceName,
-              publicationYear: art.publicationYear,
-              originalUrl: art.originalUrl,
-              status: art.status, // Keep as 'done' or 'abstract_only'
-              markdownContent: art.markdownContent,
-              tldrContent: art.tldrContent,
-              abstract: art.abstract,
-              keywords: art.keywords,
-              citationCount: art.citationCount,
-              publisher: art.publisher,
-              isOpenAccess: art.isOpenAccess,
-              metadataSource: art.metadataSource,
-            }))
-          );
-        }
-        await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
-        finalQueryId = queryId;
-      }
-
-      return NextResponse.json({
-        success: true,
-        query: combinedQuery,
-        query_id: finalQueryId,
-        total_found: cachedArticles.length,
-        cached: true,
-        message: 'Resultados reutilizados do cache. Cópias geradas para o novo ID se fornecido.',
-      });
-    }
 
     // 2. Create or Update SearchQuery Tracking Record in DB
     if (queryId) {
@@ -153,7 +176,16 @@ export async function GET(request: Request) {
       console.log(`[Search] 📝 QueryID criado: ${queryId}`);
     }
 
-    // 2. Scraping Logic
+    // 2. Scraping Logic — todas as páginas em paralelo (G1: elimina serial await-in-loop)
+    const MAX_PAGES = 2; // páginas 1 e 2 por sub-query
+    const MAX_TOTAL_RESULTS = 25;
+
+    console.log(`[Search] 🚀 Buscando ${qs.length} queries × ${MAX_PAGES} páginas em paralelo`);
+    const tasks = qs.flatMap((q) => [1, 2].map((page) => fetchSOLPage(q, page)));
+    const settled = await Promise.allSettled(tasks);
+
+    // Merge com dedup por URL
+    const seenUrls = new Set<string>();
     const allResults: Array<{
       title: string;
       authors: string;
@@ -162,94 +194,12 @@ export async function GET(request: Request) {
       sourceName: string;
       doi: string | null;
     }> = [];
-    const MAX_PAGES = 2; // Pages 1 and 2 per sub-query
-    const MAX_TOTAL_RESULTS = 25;
-
-    for (const q of qs) {
-      if (allResults.length >= MAX_TOTAL_RESULTS) break;
-
-      console.log(`[Search] 🔎 Buscando fragmento: "${q}"`);
-      for (let page = 1; page <= MAX_PAGES; page++) {
-        if (allResults.length >= MAX_TOTAL_RESULTS) break;
-
-        // SOL new search endpoint (OHS - Open Harvesting Systems)
-        // archiveIds: 1=Anais de Eventos, 2=Periódicos, 3=Livros e Relatórios
-        const searchUrl = `https://sol.sbc.org.br/busca/index.php/integrada/results?query=${encodeURIComponent(q)}&archiveIds%5B%5D=1&archiveIds%5B%5D=2&archiveIds%5B%5D=3&page=${page}`;
-
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 20_000);
-
-          const response = await fetch(searchUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            },
-            signal: controller.signal,
-          }).finally(() => clearTimeout(timeout));
-
-          if (!response.ok) {
-            console.warn(
-              `[Search] ❌ Falha ao acessar a página ${page} da SOL: Status ${response.status}`
-            );
-            continue;
-          }
-
-          const html = await response.text();
-          console.log(
-            `[Search] 🌐 SOL página ${page} OK | HTTP ${response.status} | HTML length: ${html.length} chars`
-          );
-          const $ = cheerio.load(html);
-
-          // New SOL DOM structure (2024+):
-          // Articles are NOT wrapped in a single container per item.
-          // Each article is represented by a sequence of sibling elements:
-          //   - a.record_title  → title + link
-          //   - div.recordContents  → authors, date, source
-          //
-          // Strategy: iterate over each a.record_title and read the next sibling.
-          $('a.record_title').each((i, el) => {
-            if (allResults.length >= MAX_TOTAL_RESULTS) return; // Break cheerio each
-
-            const titleEl = $(el);
-            const title = titleEl.text().trim();
-            const url = titleEl.attr('href') || '';
-
-            // The next sibling after a.record_title is div.recordContents
-            const contents = titleEl.next('div.recordContents');
-            const authors = contents.find('span.author').text().trim();
-            const yearText = contents.find('span.list_record_date').text().trim();
-            const yearMatch = yearText.match(/\d{4}/);
-            const year = yearMatch ? parseInt(yearMatch[0], 10) : new Date().getFullYear();
-            const sourceName = contents.find('div.archive_serie').text().trim() || 'SBC OpenLib';
-            const doi = extractDoi(titleEl.text() + ' ' + url);
-
-            // Avoid adding identical URLs across different sub-queries
-            if (title && url && !allResults.some((r) => r.originalUrl === url)) {
-              allResults.push({
-                title,
-                authors: authors || 'Desconhecido',
-                year,
-                originalUrl: url,
-                sourceName,
-                doi,
-              });
-            }
-          });
-
-          const matchedSelector = $('a.record_title').length;
-          console.log(
-            `[Search] 🔍 Seletor a.record_title encontrou ${matchedSelector} elementos | Artigos válidos e únicos até agora: ${allResults.length}`
-          );
-
-          // If this page returned nothing, no point fetching further pages for this sub-query
-          if (matchedSelector === 0) break;
-        } catch (pageError) {
-          const isAbort = (pageError as Error).name === 'AbortError';
-          console.warn(
-            `[Search] ⏱️ Página ${page} ${isAbort ? 'timeout (20s)' : 'erro'}: ${(pageError as Error).message}`
-          );
-          // Don't break — we might have results from previous pages
-          continue;
+    for (const result of settled) {
+      if (result.status !== 'fulfilled') continue;
+      for (const item of result.value) {
+        if (!seenUrls.has(item.originalUrl) && allResults.length < MAX_TOTAL_RESULTS) {
+          seenUrls.add(item.originalUrl);
+          allResults.push(item);
         }
       }
     }
@@ -437,26 +387,20 @@ export async function GET(request: Request) {
       .set({ status: 'processing' })
       .where(eq(searchQueries.id, queryId));
 
-    // Queue integration (Inngest Fan-Out) — only dispatch truly new (pending) articles
+    // Queue integration — 1 único evento com todos os artigos (G2: RelevanceGate roda
+    // apenas 1× no processArticlesBatch em vez de 1× por lote de 3 artigos).
     if (newArticleIds.length > 0) {
-      const batchSize = 3;
-      const events = [];
-      for (let i = 0; i < newArticleIds.length; i += batchSize) {
-        const batch = newArticleIds.slice(i, i + batchSize);
-        events.push({
-          name: 'app/process.articles.batch' as const,
-          data: {
-            query_id: queryId,
-            article_ids: batch,
-            tldr_lang: tldrLang,
-            user_id: userId ?? 'anonymous',
-          },
-        });
-      }
-
-      await inngest.send(events);
+      await inngest.send({
+        name: 'app/process.articles.batch' as const,
+        data: {
+          query_id: queryId,
+          article_ids: newArticleIds,
+          tldr_lang: tldrLang,
+          user_id: userId ?? 'anonymous',
+        },
+      });
       console.log(
-        `[Search] 🚀 ${events.length} evento(s) enviados ao Inngest com ${newArticleIds.length} artigo(s) novos`
+        `[Search] 🚀 1 evento enviado ao Inngest com ${newArticleIds.length} artigo(s) | query_id=${queryId}`
       );
     } else if (limitedResults.length > 0) {
       // All articles were served from cache — mark query as done immediately

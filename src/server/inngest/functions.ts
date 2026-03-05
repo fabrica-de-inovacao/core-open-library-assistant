@@ -157,7 +157,6 @@ export const processArticlesBatch = inngest.createFunction(
       return { success: false, skipped: true, reason: relevanceGate.reason };
     }
 
-
     // ── Fan-out: 1 evento por artigo → processamento 100% paralelo ────────────
     if (pendingArticles.length > 0) {
       await step.sendEvent(
@@ -221,7 +220,9 @@ export const processSingleArticle = inngest.createFunction(
 
     const TERMINAL = ['done', 'abstract_only', 'failed'];
     if (TERMINAL.includes(articleData.status ?? '')) {
-      logger.log(`[Inngest] ♻️ Artigo já processado (cache) | article_id=${article_id} | status=${articleData.status}`);
+      logger.log(
+        `[Inngest] ♻️ Artigo já processado (cache) | article_id=${article_id} | status=${articleData.status}`
+      );
       return { success: true, reason: 'already_processed' };
     }
 
@@ -238,7 +239,7 @@ export const processSingleArticle = inngest.createFunction(
           const response = await fetchWithTimeout(
             article.originalUrl,
             { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SOLAssistant/1.0)' } },
-            15_000,
+            15_000
           );
           if (!response.ok) {
             logger.warn(`[Inngest] ⚠️ Detail page returned ${response.status} for ${article.id}`);
@@ -272,7 +273,9 @@ export const processSingleArticle = inngest.createFunction(
           return { doi: doi ?? article.doi ?? null };
         } catch (err) {
           const isAbort = (err as Error).name === 'AbortError';
-          logger.warn(`[Inngest] ⏱️ Scrape ${isAbort ? 'timeout' : 'falhou'} | article=${article.id}: ${(err as Error).message}`);
+          logger.warn(
+            `[Inngest] ⏱️ Scrape ${isAbort ? 'timeout' : 'falhou'} | article=${article.id}: ${(err as Error).message}`
+          );
           return { doi: article.doi ?? null };
         }
       })) as { doi: string | null };
@@ -285,7 +288,7 @@ export const processSingleArticle = inngest.createFunction(
             const response = await fetchWithTimeout(
               `https://api.crossref.org/works/${encodeURIComponent(doi)}`,
               { headers: { 'User-Agent': 'SOLAssistant/1.0 (mailto:dev@example.com)' } },
-              10_000,
+              10_000
             );
 
             if (!response.ok) {
@@ -302,74 +305,57 @@ export const processSingleArticle = inngest.createFunction(
             const keywords = [...(work.keyword ?? []), ...(work.subject ?? [])].join(', ') || null;
             const citationCount = work['is-referenced-by-count'] ?? null;
 
-            await db.update(articles).set({
-              abstract: abstract ?? undefined,
-              keywords: keywords ?? undefined,
-              citationCount: citationCount ?? undefined,
-              publisher: work.publisher ?? undefined,
-              isOpenAccess: (work.license?.length ?? 0) > 0,
-              metadataSource: 'crossref',
-            }).where(eq(articles.id, article.id));
+            await db
+              .update(articles)
+              .set({
+                abstract: abstract ?? undefined,
+                keywords: keywords ?? undefined,
+                citationCount: citationCount ?? undefined,
+                publisher: work.publisher ?? undefined,
+                isOpenAccess: (work.license?.length ?? 0) > 0,
+                metadataSource: 'crossref',
+              })
+              .where(eq(articles.id, article.id));
 
-            logger.log(`[Inngest] 📊 CrossRef OK | citations=${citationCount} | article=${article.id}`);
+            logger.log(
+              `[Inngest] 📊 CrossRef OK | citations=${citationCount} | article=${article.id}`
+            );
           } catch (err) {
-            logger.warn(`[Inngest] ⚠️ CrossRef falhou | article=${article.id}: ${(err as Error).message}`);
+            logger.warn(
+              `[Inngest] ⚠️ CrossRef falhou | article=${article.id}: ${(err as Error).message}`
+            );
           }
         });
       }
 
-      // ── STEP 3: Abstract embedding ────────────────────────────────────────
-      await step.run(`embed-abstract-${article.id}`, async () => {
-        const [fresh] = await db
-          .select({ abstract: articles.abstract, tldrContent: articles.tldrContent })
-          .from(articles)
-          .where(eq(articles.id, article.id));
-
-        const text = fresh?.abstract ?? fresh?.tldrContent;
-        if (!text) return;
-
-        try {
-          const { embedding } = await embed({
-            model: getEmbeddingModel(),
-            value: text.slice(0, 2000),
-          });
-          await db
-            .update(articles)
-            .set({ abstractEmbedding: embedding })
-            .where(eq(articles.id, article.id));
-          logger.log(`[Inngest] 🧮 Embedding OK | dims=${embedding.length} | article=${article.id}`);
-        } catch (err) {
-          logger.warn(`[Inngest] ⚠️ Embedding falhou | article=${article.id}: ${(err as Error).message}`);
-        }
-      });
+      // Fase 3 (P-19): worker PyMuPDF é sempre chamado para artigos SOL.
+      // O corpus SOL é LaTeX Type1/Type3 — PyMuPDF extrai 30k+ chars corretamente.
+      // abstract_only é setado pelo próprio worker quando PyMuPDF + OCR falham
+      // (method_used === 'abstract_scraping' no ExtractResponse do worker).
+      const shouldSkipExtraction = isUserUpload;
 
       // ── STEP 4: PDF extraction (Python worker) ────────────────────────────
-      const PDF_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
       let markdownContent = '';
 
-      if (isUserUpload) {
+      if (shouldSkipExtraction) {
+        // isUserUpload: usa conteúdo já extraído pelo /extract-upload
         markdownContent = article.markdownContent ?? '';
-        logger.log(`[Inngest] ⏭️ ${article.metadataSource} — pulando extração | article=${article.id}`);
+        logger.log(
+          `[Inngest] ⏭️ ${article.metadataSource} — pulando extração | article=${article.id}`
+        );
       } else {
-        // Verifica tamanho do PDF antes de chamar o worker
-        if (article.originalUrl) {
-          try {
-            const headRes = await fetch(article.originalUrl, { method: 'HEAD' });
-            const contentLength = parseInt(headRes.headers.get('content-length') ?? '0', 10);
-            if (contentLength > PDF_SIZE_LIMIT_BYTES) {
-              logger.warn(`[Inngest] ⚠️ PDF muito grande (${Math.round(contentLength / 1024 / 1024)}MB) | article=${article.id}`);
-              await step.run(`mark-abstract-only-${article.id}`, async () => {
-                await db.update(articles).set({ status: 'abstract_only' }).where(eq(articles.id, article.id));
-              });
-              await step.run('check-and-mark-query-done-early', () => _checkAndMarkQueryDone(query_id));
-              return { success: true, reason: 'pdf_too_large' };
-            }
-          } catch {
-            // HEAD falhou — continua e deixa o worker decidir
-          }
-        }
-
         const WORKER_BASE = process.env.PYTHON_WORKER_URL ?? 'http://127.0.0.1:8000';
+
+        // Sinaliza 'extracting' antes de chamar o worker — preenche o gap de UX
+        // entre 'pending' (na fila Inngest) e 'llm_processing' (após extração).
+        // Obs: em replay do step Inngest este update é re-executado sem problema.
+        await step.run(`set-extracting-${article.id}`, async () => {
+          await db
+            .update(articles)
+            .set({ status: 'extracting' })
+            .where(eq(articles.id, article.id));
+        });
+
         const extractionResult = await step.run(`extract-pdf-${article.id}`, async () => {
           logger.log(`[Inngest] 🔄 Python Worker | article=${article.id} | worker=${WORKER_BASE}`);
           try {
@@ -389,7 +375,9 @@ export const processSingleArticle = inngest.createFunction(
               content_markdown?: string;
               method_used?: string;
             };
-            logger.log(`[Inngest] 🐍 Worker OK | method=${data.method_used} | chars=${data.content_markdown?.length ?? 0} | article=${article.id}`);
+            logger.log(
+              `[Inngest] 🐍 Worker OK | method=${data.method_used} | chars=${data.content_markdown?.length ?? 0} | article=${article.id}`
+            );
             return data;
           } catch (err) {
             logger.error(`[Inngest] ❌ Python Worker falhou | article=${article.id}:`, err);
@@ -406,11 +394,15 @@ export const processSingleArticle = inngest.createFunction(
         }
 
         markdownContent = extractionResult.content_markdown || '';
-        const workerStatus = extractionResult.method_used === 'abstract_scraping' ? 'abstract_only' : 'llm_processing';
+        const workerStatus =
+          extractionResult.method_used === 'abstract_scraping' ? 'abstract_only' : 'llm_processing';
         const safeMarkdown = markdownContent.replace(/\x00/g, '');
 
         await step.run(`save-markdown-${article.id}`, async () => {
-          await db.update(articles).set({ markdownContent: safeMarkdown, status: workerStatus }).where(eq(articles.id, article.id));
+          await db
+            .update(articles)
+            .set({ markdownContent: safeMarkdown, status: workerStatus })
+            .where(eq(articles.id, article.id));
         });
       }
 
@@ -428,25 +420,31 @@ export const processSingleArticle = inngest.createFunction(
             const { text: extracted } = await generateText({
               model: getModelForTask('tldr'),
               abortSignal: AbortSignal.timeout(20_000),
-              system: 'Você é um extrator de metadados de artigos científicos. Retorne APENAS um JSON válido: {"title":"<titulo>","authors":"<Sobrenome A, Sobrenome B>"}',
+              system:
+                'Você é um extrator de metadados de artigos científicos. Retorne APENAS um JSON válido: {"title":"<titulo>","authors":"<Sobrenome A, Sobrenome B>"}',
               prompt: `Extraia título e autores:\n\n${sample}`,
             });
 
             let parsed: { title?: string; authors?: string } = {};
-            try { parsed = JSON.parse(extracted.trim()) as { title?: string; authors?: string }; } catch { return md; }
+            try {
+              parsed = JSON.parse(extracted.trim()) as { title?: string; authors?: string };
+            } catch {
+              return md;
+            }
 
             const inferredTitle = parsed.title?.trim();
             if (!inferredTitle || inferredTitle.length < 5) return md;
 
             const searchUrl = new URL('https://api.crossref.org/works');
             searchUrl.searchParams.set('query.bibliographic', inferredTitle);
-            if (parsed.authors?.trim()) searchUrl.searchParams.set('query.author', parsed.authors.trim());
+            if (parsed.authors?.trim())
+              searchUrl.searchParams.set('query.author', parsed.authors.trim());
             searchUrl.searchParams.set('rows', '3');
 
             const res = await fetchWithTimeout(
               searchUrl.toString(),
               { headers: { 'User-Agent': 'SOLAssistant/1.0' } },
-              12_000,
+              12_000
             );
 
             if (!res.ok) return md;
@@ -462,31 +460,40 @@ export const processSingleArticle = inngest.createFunction(
             const title = best.title?.[0] ?? inferredTitle;
             const authors =
               best.author?.map((a) => [a.given, a.family].filter(Boolean).join(' ')).join(', ') ??
-              parsed.authors ?? null;
-            const dateArr = best['published-print']?.['date-parts']?.[0] ?? best['published-online']?.['date-parts']?.[0];
+              parsed.authors ??
+              null;
+            const dateArr =
+              best['published-print']?.['date-parts']?.[0] ??
+              best['published-online']?.['date-parts']?.[0];
             const year = dateArr?.[0] ?? null;
             const abstract = best.abstract?.replace(/<\/?jats:[^>]+>/g, '').trim() ?? null;
             const keywords = [...(best.keyword ?? []), ...(best.subject ?? [])].join(', ') || null;
 
-            await db.update(articles).set({
-              title,
-              ...(doi ? { doi } : {}),
-              ...(authors ? { authors } : {}),
-              ...(year ? { publicationYear: year } : {}),
-              ...(best.publisher ? { publisher: best.publisher } : {}),
-              ...(best['container-title']?.[0] ? { sourceName: best['container-title'][0] } : {}),
-              ...(abstract ? { abstract } : {}),
-              ...(keywords ? { keywords } : {}),
-              isOpenAccess: (best.license?.length ?? 0) > 0,
-              metadataSource: 'crossref',
-            }).where(eq(articles.id, article.id));
+            await db
+              .update(articles)
+              .set({
+                title,
+                ...(doi ? { doi } : {}),
+                ...(authors ? { authors } : {}),
+                ...(year ? { publicationYear: year } : {}),
+                ...(best.publisher ? { publisher: best.publisher } : {}),
+                ...(best['container-title']?.[0] ? { sourceName: best['container-title'][0] } : {}),
+                ...(abstract ? { abstract } : {}),
+                ...(keywords ? { keywords } : {}),
+                isOpenAccess: (best.license?.length ?? 0) > 0,
+                metadataSource: 'crossref',
+              })
+              .where(eq(articles.id, article.id));
 
             // Enriquece o contexto do TL;DR com o abstract real encontrado
             if (abstract) {
               md = `# ${title}\n\n**Resumo:** ${abstract}\n\n---\n\n` + md;
             }
           } catch (err) {
-            logger.warn(`[Inngest] ⚠️ Inferência metadados falhou | article=${article.id}:`, (err as Error).message);
+            logger.warn(
+              `[Inngest] ⚠️ Inferência metadados falhou | article=${article.id}:`,
+              (err as Error).message
+            );
           }
           return md; // ← sempre retorna, cacheado pelo Inngest para uso em replay
         })) as string;
@@ -503,7 +510,9 @@ export const processSingleArticle = inngest.createFunction(
         const contextPrefix = [
           enriched?.keywords ? `Palavras-chave oficiais: ${enriched.keywords}` : '',
           enriched?.abstract ? `Resumo do autor: ${enriched.abstract.substring(0, 500)}` : '',
-        ].filter(Boolean).join('\n');
+        ]
+          .filter(Boolean)
+          .join('\n');
 
         try {
           const { text } = await generateText({
@@ -524,14 +533,40 @@ REGRAS: Máximo 600 caracteres. Obrigatoriamente em ${tldrLangLabel}. Sem texto 
         }
       });
 
-      // ── STEP 6: Salvar TL;DR e verificar conclusão da query ──────────────
-      await step.run(`save-tldr-${article.id}`, async () => {
-        await db.update(articles).set({
-          tldrContent: tldr || 'Falha ao gerar síntese via IA.',
-          status: tldr ? 'done' : 'failed',
-        }).where(eq(articles.id, article.id));
+      // ── STEP 5.5: Embedding — gerado APÓS TL;DR para usar o conteúdo mais rico ──
+      // TL;DR sintético (600 chars estruturados) > abstract para matching semântico.
+      await step.run(`embed-content-${article.id}`, async () => {
+        const text = (tldr ?? article.abstract) || null;
+        if (!text) return;
+        try {
+          const { embedding } = await embed({
+            model: getEmbeddingModel(),
+            value: text.slice(0, 2000),
+          });
+          await db
+            .update(articles)
+            .set({ abstractEmbedding: embedding })
+            .where(eq(articles.id, article.id));
+          logger.log(
+            `[Inngest] 🧮 Embedding OK | dims=${embedding.length} | article=${article.id}`
+          );
+        } catch (err) {
+          logger.warn(
+            `[Inngest] ⚠️ Embedding falhou | article=${article.id}: ${(err as Error).message}`
+          );
+        }
       });
 
+      // ── STEP 6: Salvar TL;DR e verificar conclusão da query ──────────────
+      await step.run(`save-tldr-${article.id}`, async () => {
+        await db
+          .update(articles)
+          .set({
+            tldrContent: tldr || 'Falha ao gerar síntese via IA.',
+            status: tldr ? 'done' : 'failed',
+          })
+          .where(eq(articles.id, article.id));
+      });
     } catch (articleErr) {
       logger.error(`[Inngest] ❌ Erro inesperado | article=${article.id}:`, articleErr);
       await step.run(`mark-failed-unexpected-${article.id}`, async () => {
@@ -572,7 +607,8 @@ async function _checkAndMarkQueryDone(query_id: string): Promise<void> {
         eq(searchQueries.id, query_id),
         notInArray(searchQueries.status, ['done', 'cancelled', 'needs_refinement']),
         notExists(
-          db.select({ _: sql`1` })
+          db
+            .select({ _: sql`1` })
             .from(articles)
             .where(
               and(
