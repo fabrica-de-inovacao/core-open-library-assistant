@@ -278,8 +278,7 @@ Exceção: saudações puras ("oi", "olá", "tudo bem?") sem conteúdo temático
 **FLUXO DE BUSCA — quando o usuário PEDIR explicitamente uma nova pesquisa (sessão com ou sem artigos):**
 1. Chame SEMPRE \`propose_search_sol_database\` primeiro — é a base de dados principal do sistema.
 2. Ao chamar \`propose_search_sol_database\`: passe APENAS \`topic\` com o tema em linguagem natural e \`queries: []\` (array vazio). NÃO elabore strings booleanas — o agente de estratégia especializado as gerará automaticamente.
-3. Após retorno de \`propose_search_sol_database\`, escreva APENAS uma frase curta confirmando (ex.: "Estratégia de busca pronta — revise as strings se necessário e clique em **Executar** quando estiver pronto."). PARE imediatamente.
-   - EXCEÇÃO: se você estiver chamando \`propose_search_global_database\` porque o [SISTEMA] indicou que a busca SOL não retornou resultados, escreva 2 frases explicando a situação ao usuário (SOL sem resultados → propondo OpenAlex). Não use apenas o texto genérico de confirmação.
+3. Após retorno de \`propose_search_sol_database\` ou \`propose_search_global_database\`: NÃO gere NENHUM texto. O card na UI já comunica o status ao usuário. Para contextualizar a situação (ex: SOL sem resultados → vou buscar no OpenAlex), escreva a explicação ANTES de chamar a ferramenta — nunca depois.
 4. Não repita uma proposta se já houver uma no histórico — aguarde o usuário clicar em Executar.
 - NUNCA chame \`propose_search_global_database\` na primeira interação de busca. Use SOMENTE quando: (a) o sistema informar explicitamente que a busca SOL retornou poucos resultados (≤ 5), ou (b) o usuário pedir EXPLICITAMENTE busca global, OpenAlex, ACM ou IEEE.
 - NUNCA liste strings de busca no corpo do texto. Elas só existem dentro das ferramentas.
@@ -537,7 +536,8 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
     // P-07: Tool handlers extraídos para server/tools/ (SRP).
     // Cada builder recebe o contexto da request (userId/chatId) via closure.
     tools: {
-      propose_search_sol_database: buildProposeSearchSolDatabaseTool({ sessionUserId, chatId }),
+      // Fase C (Batch 4 C-2): passa synthesisDepth para SOL tool limitar queries
+      propose_search_sol_database: buildProposeSearchSolDatabaseTool({ sessionUserId, chatId, synthesisDepth }),
       propose_search_global_database: buildProposeSearchGlobalDatabaseTool({
         sessionUserId,
         chatId,

@@ -112,19 +112,15 @@ export function getLanguageModel(): LanguageModel {
  */
 export function getEmbeddingModel(): EmbeddingModel {
   const provider = (process.env.LLM_PROVIDER ?? 'google').toLowerCase() as SupportedProvider;
-  // Força text-embedding-004: @ai-sdk/google@3 passou a usar text-embedding-005 como default,
-  // mas esse modelo não está disponível no endpoint v1beta (retorna 404).
-  // text-embedding-004 é multilingual, 768 dims, estável em v1beta.
-  // Proteção: se o env definir 005, faz downgrade silencioso para 004.
-  const GOOGLE_SAFE_EMBEDDING = 'text-embedding-004';
+  // Usa o modelo definido no env ou cai no default do provider.
+  // Nota: @ai-sdk/google@3 usa v1beta como base URL, o que limita a disponibilidade
+  // de modelos. Se o modelo falhar, o Inngest loga WARN e continua sem embedding
+  // (não bloqueia TL;DR nem o status 'done' dos artigos).
   const envModel = process.env.EMBEDDING_MODEL;
   const modelId =
     provider === 'openai'
       ? (envModel ?? 'text-embedding-3-small')
-      : // Para Google: bloqueia 005 (não disponível em v1beta) → força 004
-        envModel && envModel !== 'text-embedding-005'
-        ? envModel
-        : GOOGLE_SAFE_EMBEDDING;
+      : (envModel ?? 'text-embedding-005'); // text-embedding-005: default estável Google
 
   switch (provider) {
     case 'openai':

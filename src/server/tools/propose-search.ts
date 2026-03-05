@@ -10,6 +10,7 @@ import { desc, eq, ne, and } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries } from '@/server/db/schema';
 import { runStrategyAgent } from '@/server/agents/strategy-agent';
+import type { SynthesisDepth } from '@/server/agents/synthesis-agent';
 import { logger } from '@/lib/logger';
 
 const searchSchema = z.object({
@@ -30,6 +31,8 @@ const searchSchema = z.object({
 export interface ToolContext {
   sessionUserId: string | null;
   chatId: string | null;
+  /** Fase C (Batch 4 C-2): limita número de queries geradas pelo StrategyAgent */
+  synthesisDepth?: SynthesisDepth;
 }
 
 export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
@@ -76,10 +79,22 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
         }
 
         // I-04: strategy-agent gera todas as queries a partir do topic
+        // Fase C (Batch 4 C-2): cap de queries baseado na profundidade de síntese.
+        // brief → 1 query (quick_lookup não precisa de múltiplas estratégias)
+        // standard → 2 queries
+        // full / undefined → sem cap (StrategyAgent decide)
+        const maxQueriesOverride =
+          ctx.synthesisDepth === 'brief' ? 1 : ctx.synthesisDepth === 'standard' ? 2 : undefined;
+
         let finalQueries = rawQueries;
         if (topic) {
           try {
-            const strategy = await runStrategyAgent(topic, rawQueries, previousFailedQueries);
+            const strategy = await runStrategyAgent(
+              topic,
+              rawQueries,
+              previousFailedQueries,
+              maxQueriesOverride
+            );
             finalQueries = strategy.queries;
             logger.info(
               `[Tool] StrategyAgent: geradas ${finalQueries.length} queries para tópico "${topic.slice(0, 60)}"`
@@ -137,14 +152,15 @@ export function buildProposeSearchGlobalDatabaseTool(ctx: ToolContext) {
     description:
       'Propõe uma busca na base científica global OpenAlex. Regras críticas para a query: ' +
       '(1) Termos genéricos SEMPRE em inglês. ' +
-      '(2) Nomes próprios em Português (ex: "Mermãs Digitais", "ProInfo") NÃO aparecem na literatura internacional — NUNCA os use como termo AND mandatório. Em vez disso, use os CONCEITOS que o projeto representa (ex: "digital inclusion" AND "women" AND education). ' +
-      '(3) Se o usuário citou um projeto/programa, extraia os conceitos centrais e busque por eles. ' +
-      '(4) Prefira queries simples e conceituais a queries booleanas complexas.',
+      '(2) Se o usuário citou um nome próprio de projeto, programa, empresa ou equipe (ex: "Mermãs Digitais", "ProInfo"), INCLUA-O ENTRE ASPAS DUPLAS na query — ele pode estar indexado no OpenAlex. O sistema tenta automaticamente uma busca sem o nome próprio caso não encontre resultados. ' +
+      '(3) Combine o nome próprio com conceitos gerais em inglês: ex: "\"Mermãs Digitais\" AND (education OR \"digital inclusion\")". ' +
+      '(4) Para buscas puramente conceituais (sem nome próprio), use apenas termos em inglês. ' +
+      '(5) Prefira queries simples a queries booleanas complexas.',
     inputSchema: z.object({
       query: z
         .string()
         .describe(
-          'String de busca em inglês com conceitos gerais. NÃO use nomes próprios em Português como AND mandatório (eles não aparecem no OpenAlex). Ex correto: "digital inclusion women education computing" ou "(\"digital literacy\" OR \"digital inclusion\") AND women AND education". Ex errado: "\"Mermãs Digitais\" AND education"'
+          'String de busca para o OpenAlex. Se o input do usuário contém nome próprio de projeto/programa/empresa, inclua-o entre aspas duplas e adicione conceitos em inglês como contexto. Ex. com nome próprio: "\"Mermãs Digitais\" AND (education OR \"digital inclusion\")" ou "\"ProInfo\" AND Brazil AND education". Ex. sem nome próprio: "digital inclusion women education computing"'
         ),
     }),
     execute: async (input) => {

@@ -48,34 +48,49 @@ const PUBLISHER_FILTER =
 
 /**
  * Normaliza a query antes de enviar ao OpenAlex.
- * Principal problema: o LLM às vezes gera `""Termo""` (double-double-quotes)
- * que o OpenAlex não entende — converte para `"Termo"`.
+ * Casos cobertos:
+ *   - `""Termo""` (double-double-quotes nos dois lados) → `"Termo"`
+ *   - `""Termo"` (aspas duplas apenas no início)          → `"Termo"`
  */
 function normalizeOpenAlexQuery(raw: string): string {
-  return raw.replace(/""([^"]+)""/g, '"$1"').trim();
+  return raw
+    .replace(/""([^"]+)""/g, '"$1"') // ""term"" → "term"
+    .replace(/^""/, '"')               // leading "" → "  (ex: ""Mermãs Digitais")
+    .trim();
 }
 
 /**
- * Gera uma query de fallback removendo termos próprios com caracteres não-ASCII
- * (ex: "Mermãs Digitais", "Sereias Digitais") que dificilmente aparecem
- * na literatura acadêmica indexada pelo OpenAlex.
- * Mantém apenas os termos conceituais em inglês.
+ * Gera uma query de fallback removendo termos com caracteres não-ASCII
+ * (ex: "Mermãs Digitais") para ampliar o alcance quando a busca pelo nome
+ * próprio não retornou resultados. Mantém apenas os termos conceituais.
  */
 function buildFallbackQuery(query: string): string | null {
-  // Só vale a pena se a query tem operadores booleanos
+  // Só vale a pena se a query contém caracteres não-ASCII
+  const hasNonAscii = /[^\x00-\x7F]/.test(query);
+  if (!hasNonAscii) return null;
+
   const hasBoolean = /\b(AND|OR|NOT)\b/.test(query);
-  if (!hasBoolean) return null;
+  let stripped: string;
 
-  // Remove termos entre aspas que contêm caracteres não-ASCII (nomes próprios em Pt-BR)
-  let stripped = query.replace(/"[^"]*[^\x00-\x7F][^"]*"(\s+(AND|OR)\s*)?/gi, '');
+  if (hasBoolean) {
+    // Remove termos entre aspas que contêm caracteres não-ASCII (nomes próprios em Pt-BR)
+    stripped = query.replace(/"[^"]*[^\x00-\x7F][^"]*"(\s+(AND|OR)\s*)?/gi, '');
 
-  // Limpa operadores booleanos órfãos no início/fim
-  stripped = stripped
-    .replace(/^\s*(AND|OR)\s+/i, '')
-    .replace(/\s+(AND|OR)\s*$/i, '')
-    .replace(/\(\s*\)/g, '') // parênteses vazios
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+    // Limpa operadores booleanos órfãos no início/fim
+    stripped = stripped
+      .replace(/^\s*(AND|OR)\s+/i, '')
+      .replace(/\s+(AND|OR)\s*$/i, '')
+      .replace(/\(\s*\)/g, '') // parênteses vazios
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  } else {
+    // Consulta simples: remove palavras que contenham caracteres não-ASCII
+    // (ex: "diagnóstico" → removido; "machine learning" → mantido)
+    stripped = query
+      .replace(/\S*[^\x00-\x7F]\S*/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
 
   return stripped && stripped !== query && stripped.length > 3 ? stripped : null;
 }
@@ -97,7 +112,7 @@ async function doOpenAlexFetch(
     `&per-page=${perPage}` +
     `&select=${OPENALEX_SELECT}`;
 
-  logger.log(`[GlobalSearch] 🌐 OpenAlex tentativa ${attempt} | CS=${filterCS} | ${url}`);
+  logger.debug(`[GlobalSearch] 🌐 OpenAlex tentativa ${attempt} | CS=${filterCS} | ${url}`);
 
   const response = await fetch(url, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
@@ -117,7 +132,7 @@ async function doOpenAlexFetch(
 
   const data = parsed.data;
   const totalCount = data.meta?.count ?? 0;
-  logger.log(
+  logger.info(
     `[GlobalSearch] ✅ Tentativa ${attempt}: ${data.results?.length ?? 0} / ${totalCount} resultados`
   );
 
@@ -173,7 +188,7 @@ async function fetchOpenAlexWorks(
   articleLimit: number = 25
 ): Promise<MappedArticle[]> {
   const cleanQuery = normalizeOpenAlexQuery(query);
-  logger.log(`[GlobalSearch] Query normalizada: "${cleanQuery}"`);
+  logger.debug(`[GlobalSearch] Query normalizada: "${cleanQuery}"`);
 
   // Tentativa 1: com filtro CS
   const attempt1 = await doOpenAlexFetch(cleanQuery, true, 1, articleLimit);
@@ -186,7 +201,7 @@ async function fetchOpenAlexWorks(
   // Tentativa 3: fallback removendo nomes próprios não-ASCII + filtro CS
   const fallbackQuery = buildFallbackQuery(cleanQuery);
   if (fallbackQuery) {
-    logger.log(`[GlobalSearch] 🔄 Fallback query (sem nomes próprios): "${fallbackQuery}"`);
+    logger.info(`[GlobalSearch] 🔄 Fallback query (sem nomes próprios): "${fallbackQuery}"`);
 
     const attempt3 = await doOpenAlexFetch(fallbackQuery, true, 3, articleLimit);
     if (attempt3.articles.length > 0) return attempt3.articles;
@@ -244,7 +259,7 @@ export async function GET(request: Request) {
     const rawLimit = Number(searchParams.get('limit') ?? '25');
     const articleLimit = [10, 25].includes(rawLimit) ? rawLimit : 25;
 
-    logger.log(
+    logger.info(
       `[GlobalSearch] ⚡ Nova busca global | query: "${q}" | queryId: ${queryId ?? 'novo'} | userId: ${userId ?? 'anon'}`
     );
 
@@ -254,7 +269,7 @@ export async function GET(request: Request) {
         .update(searchQueries)
         .set({ status: 'searching', expandedQuery: 'source:openalex' })
         .where(eq(searchQueries.id, queryId));
-      logger.log(`[GlobalSearch] 📝 QueryID recebido e atualizado para searching: ${queryId}`);
+      logger.debug(`[GlobalSearch] 📝 QueryID recebido → searching: ${queryId}`);
     } else {
       const [inserted] = await db
         .insert(searchQueries)
@@ -266,7 +281,7 @@ export async function GET(request: Request) {
         })
         .returning();
       queryId = inserted.id;
-      logger.log(`[GlobalSearch] 📝 QueryID criado: ${queryId}`);
+      logger.info(`[GlobalSearch] 📝 QueryID criado: ${queryId}`);
     }
 
     // 2. Fetch from OpenAlex
@@ -290,9 +305,28 @@ export async function GET(request: Request) {
 
     // Garante que o número de resultados não ultrapassa o limite configurado pelo usuário
     allResults = allResults.slice(0, articleLimit);
-    logger.log(
+    logger.debug(
       `[GlobalSearch] 📊 Limite aplicado: ${articleLimit} | Resultados: ${allResults.length}`
     );
+
+    // Fase C (Batch 2): paridade com SOL — poucos resultados não são suficientes para
+    // revisão sistemática. Marca needs_refinement para acionar fallback automático.
+    const MIN_USEFUL_ARTICLES = 5;
+    if (allResults.length > 0 && allResults.length < MIN_USEFUL_ARTICLES) {
+      await db
+        .update(searchQueries)
+        .set({ status: 'needs_refinement' })
+        .where(eq(searchQueries.id, queryId));
+      logger.warn(
+        `[GlobalSearch] ⚠️ Apenas ${allResults.length} resultado(s) — marcando needs_refinement`
+      );
+      return NextResponse.json({
+        success: true,
+        needs_refinement: true,
+        total_found: allResults.length,
+        query_id: queryId,
+      });
+    }
 
     // 3. DOI deduplication — reuse already-processed articles to avoid redundant extraction
     const newArticleIds: string[] = [];
@@ -346,7 +380,7 @@ export async function GET(request: Request) {
         }
       }
 
-      logger.log(
+      logger.info(
         `[GlobalSearch] ♻️ ${toInsertCached.length} do cache | ${toInsertFresh.length} novos para extração`
       );
 
@@ -388,7 +422,7 @@ export async function GET(request: Request) {
               updatedAt: sql`now()`,
             },
           });
-        logger.log(`[GlobalSearch] ✅ ${cachedRows.length} artigos do cache inseridos`);
+        logger.info(`[GlobalSearch] ✅ ${cachedRows.length} artigos do cache inseridos`);
       }
 
       // Insert fresh articles as pending (Inngest will process them)
@@ -411,7 +445,7 @@ export async function GET(request: Request) {
             }))
           )
           .onConflictDoNothing();
-        logger.log(
+        logger.info(
           `[GlobalSearch] ✅ ${toInsertFresh.length} artigos novos inseridos como pending`
         );
 
@@ -447,13 +481,13 @@ export async function GET(request: Request) {
       }
       const { inngest } = await import('@/server/inngest/client');
       await inngest.send(events);
-      logger.log(
-        `[GlobalSearch] 🚀 ${events.length} evento(s) Inngest enviados com ${newArticleIds.length} artigo(s)`
+      logger.info(
+        `[GlobalSearch] 🚀 ${events.length} evento(s) Inngest com ${newArticleIds.length} artigo(s)`
       );
     } else if (allResults.length > 0) {
       // All from cache — mark done immediately
       await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
-      logger.log(`[GlobalSearch] ✅ Todos do cache — query marcada como done`);
+      logger.info(`[GlobalSearch] ✅ Todos do cache — done`);
     } else {
       // No results at all — also mark done
       await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));

@@ -24,6 +24,8 @@ import {
 } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
+import { supabase } from '@/lib/supabase';
+import { rankArticles, type Article } from '@/lib/reranking';
 
 // Fase 3 (P-chips): chips de sugestão rápida exibidos no input quando needs_refinement
 export type SuggestionChip = { label: string; icon: string; message: string };
@@ -51,6 +53,21 @@ const NEEDS_REFINEMENT_CHIPS: SuggestionChip[] = [
     message: 'Vamos repensar a abordagem da pesquisa e definir um novo ângulo',
   },
 ];
+
+// ── Helpers internos ──────────────────────────────────────────────────────────
+
+/** Normaliza output de tool part — desencapsula o wrapper `{type:'json', value:...}` do AI SDK */
+function normalizeToolOutput(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  return r.type === 'json' ? (r.value as Record<string, unknown>) : r;
+}
+
+/** Extrai query_id do output de propose_search_* — DRY para os 3 locais de auto-execução */
+function extractQueryId(rawOutput: unknown): string | undefined {
+  const o = normalizeToolOutput(rawOutput);
+  return typeof o?.query_id === 'string' ? o.query_id : undefined;
+}
 
 interface UseChatOrchestrationOptions {
   urlQueryId: string | undefined;
@@ -172,6 +189,10 @@ export function useChatOrchestration({
     sendMessageRef.current = sendMessage;
   }, [sendMessage]);
 
+  // Stable ref para refreshArticles — populado após useSupabaseRealtime estar disponível
+  // Necessário para re-fetch de artigos dentro do handleExecuteSearch (useCallback com [])
+  const refreshArticlesRef = useRef<(() => Promise<void>) | null>(null);
+
   // ── Search State ────────────────────────────────────────────────────────────
 
   const [runningSearches, setRunningSearches] = useState<Set<string>>(new Set());
@@ -188,27 +209,17 @@ export function useChatOrchestration({
    * Resetado quando uma busca conclui com sucesso (queryStatus=done).
    */
   const solSearchFailureCountRef = useRef<number>(0);
+  // Fase C (A-5): guard idempotente — garante que cada queryId seja contado apenas uma vez
+  // mesmo que Realtime e resposta da API disparem simultaneamente.
+  const failureCountedRef = useRef<Set<string>>(new Set());
   // Fase 3 (P-23): IDs executados na sessão atual (complementado pela derivação abaixo)
   const [localExecutedIds, setLocalExecutedIds] = useState<Set<string>>(new Set());
 
-  // Deriva executedProposalIds: combina IDs da sessão + IDs de buscas já presentes
-  // nas mensagens carregadas do DB, para que cards executados apareçam corretos após reload.
+  // Deriva executedProposalIds: combina IDs da sessão com IDs carregados do DB
+  // via useEffect abaixo (à frente no arquivo, após articles estar disponível).
   const executedProposalIds = useMemo<Set<string>>(() => {
-    const ids = new Set<string>(localExecutedIds);
-    for (const msg of messages) {
-      for (const part of msg.parts ?? []) {
-        if (
-          isToolOrDynamicToolUIPart(part) &&
-          (getToolOrDynamicToolName(part) === 'search_sol_database' ||
-            getToolOrDynamicToolName(part) === 'search_global_database')
-        ) {
-          const queryId = (part as any).input?.query_id;
-          if (queryId) ids.add(queryId);
-        }
-      }
-    }
-    return ids;
-  }, [messages, localExecutedIds]);
+    return new Set<string>(localExecutedIds);
+  }, [localExecutedIds]);
 
   const handleExecuteSearch = useCallback(
     async (queries: string[], qId: string, isGlobal = false) => {
@@ -216,6 +227,7 @@ export function useChatOrchestration({
       // Fase 3 (P-chips): nova busca iniciada → descarta chips anteriores
       setSuggestionChips(null);
       setSessionQueryId(qId);
+      sessionQueryIdRef.current = qId; // Fase C: sincroniza ref imediatamente — elimina setTimeout(300)
       setLocalExecutedIds((prev) => new Set(prev).add(qId));
       setRunningSearches((prev) => new Set(prev).add(qId));
       setZeroResultSearches((prev) => {
@@ -275,23 +287,27 @@ export function useChatOrchestration({
 
           // Fase C (IA-04): automação de fallback — AI age sozinha, notifica o usuário.
           // Chips ficam visíveis como override manual caso o usuário queira controlar.
-          solSearchFailureCountRef.current += 1;
+          // Fase C (A-5): guard idempotente — evita duplo incremento se Realtime e API
+          // responserem para o mesmo qId quase simultaneamente.
+          if (!failureCountedRef.current.has(qId)) {
+            failureCountedRef.current.add(qId);
+            solSearchFailureCountRef.current += 1;
+          }
           const failCount = solSearchFailureCountRef.current;
           setSuggestionChips(NEEDS_REFINEMENT_CHIPS);
 
-          setTimeout(() => {
-            if (failCount === 1) {
-              // 1ª falha: AI relança SOL automaticamente com termos diversificados
-              sendMessageRef.current({
-                text: `[SISTEMA] A busca SOL retornou apenas ${data.total_found ?? 0} resultado(s) — insuficiente para revisão sistemática. Chame IMEDIATAMENTE propose_search_sol_database com o MESMO tópico da conversa e queries:[]. O agente de estratégia já tem acesso ao histórico de buscas anteriores desta sessão e irá diversificar os termos automaticamente. Antes de chamar a tool, escreva EXATAMENTE UMA frase curta em Português informando ao usuário: (1) quantos resultados foram encontrados, (2) que você está tentando automaticamente com uma estratégia mais ampla. NÃO use essa frase de forma genérica — mencione o número exato de resultados.`,
-              });
-            } else {
-              // 2ª+ falha: AI escala para OpenAlex automaticamente
-              sendMessageRef.current({
-                text: `[SISTEMA] Após ${failCount} tentativas na base SOL sem resultados suficientes para o tema, chame IMEDIATAMENTE propose_search_global_database com o tópico da conversa em inglês/conceitos. Antes de chamar a tool, escreva EXATAMENTE DUAS frases em Português: (1) diga quantas tentativas foram feitas na SOL e que nenhuma trouxe artigos suficientes, (2) explique que você está expandindo automaticamente para a base global OpenAlex (+250 milhões de artigos científicos).`,
-              });
-            }
-          }, 300);
+          // Fase C: ref já sincronizada acima — chamada direta sem setTimeout
+          if (failCount === 1) {
+            // 1ª falha: AI relança SOL automaticamente com termos diversificados
+            sendMessageRef.current({
+              text: `[SISTEMA] A busca SOL retornou apenas ${data.total_found ?? 0} resultado(s) — insuficiente para revisão sistemática. Chame IMEDIATAMENTE propose_search_sol_database com o MESMO tópico da conversa e queries:[]. O agente de estratégia já tem acesso ao histórico de buscas anteriores desta sessão e irá diversificar os termos automaticamente. NÃO escreva nada — chame a tool diretamente.`,
+            });
+          } else {
+            // 2ª+ falha: AI escala para OpenAlex automaticamente
+            sendMessageRef.current({
+              text: `[SISTEMA] Após ${failCount} tentativas na base SOL sem resultados suficientes para o tema, chame IMEDIATAMENTE propose_search_global_database com o tópico da conversa em inglês/conceitos. NÃO escreva nada — chame a tool diretamente.`,
+            });
+          }
           return;
         }
 
@@ -308,6 +324,13 @@ export function useChatOrchestration({
             return n;
           });
           setZeroResultSearches((prev) => new Set(prev).add(qId));
+        } else {
+          // Fase (P-14-fix): Re-fetch artigos após busca bem-sucedida para garantir que
+          // a UI receba os artigos mesmo que o Realtime tenha perdido os INSERTs
+          // (race condition entre fetchInitial e o commit dos INSERTs no Supabase).
+          setTimeout(() => {
+            void refreshArticlesRef.current?.();
+          }, 1_500);
         }
       } catch (err) {
         console.error('Search execution failed:', err);
@@ -338,10 +361,7 @@ export function useChatOrchestration({
           if (name !== 'propose_search_sol_database' && name !== 'propose_search_global_database')
             continue;
           if ((part as { state?: string }).state !== 'output-available') continue;
-          const raw = (part as { output?: Record<string, unknown> }).output;
-          const qId = (
-            raw?.type === 'json' ? (raw.value as Record<string, unknown>)?.query_id : raw?.query_id
-          ) as string | undefined;
+          const qId = extractQueryId((part as { output?: unknown }).output);
           if (qId) ids.add(qId);
         }
       }
@@ -360,9 +380,7 @@ export function useChatOrchestration({
         )
           continue;
         if (part.state !== 'output-available') continue;
-        const rawOutput = (part as any).output;
-        const finalOutput: Record<string, unknown> | undefined =
-          rawOutput?.type === 'json' ? (rawOutput.value as Record<string, unknown>) : rawOutput;
+        const finalOutput = normalizeToolOutput((part as any).output);
         const qId = finalOutput?.query_id as string | undefined;
         if (!qId) continue;
         if (executedProposalIds.has(qId) || pendingAutoExecuteRef.current.has(qId)) continue;
@@ -371,9 +389,14 @@ export function useChatOrchestration({
         pendingAutoExecuteRef.current.add(qId);
         const queries = Array.isArray(finalOutput?.queries)
           ? (finalOutput.queries as string[])
-          : Array.isArray(finalOutput?.query)
+          : typeof finalOutput?.query === 'string'
             ? [finalOutput.query as string]
             : [];
+        // Fase (P-19-fix): NÃO pré-marcar global em reviewedQueryIdsRef —
+        // a pré-marcação bloqueava a síntese automática ao impedir o useEffect
+        // de queryStatus=done de processar o qId da busca global.
+        // O loop foi corrigido na raiz (typeof query === 'string'), tornando
+        // a pré-marcação desnecessária.
         void handleExecuteSearch(queries, qId, toolName === 'propose_search_global_database');
       }
     }
@@ -430,13 +453,12 @@ export function useChatOrchestration({
       for (const part of msg.parts) {
         if (!isToolOrDynamicToolUIPart(part)) continue;
         const toolName = getToolOrDynamicToolName(part);
-        if (toolName !== 'search_sol_database' && toolName !== 'search_global_database') continue;
+        if (toolName !== 'propose_search_sol_database' && toolName !== 'propose_search_global_database') continue;
         if (part.state !== 'output-available') continue;
-        const rawOutput = (part as any).output;
-        const output = (rawOutput?.type === 'json' ? rawOutput.value : rawOutput) as {
+        const output = normalizeToolOutput((part as any).output) as {
           success: boolean;
           query_id?: string;
-        };
+        } | undefined;
         if (output?.success && output.query_id) return output.query_id;
       }
     }
@@ -451,7 +473,7 @@ export function useChatOrchestration({
       for (const part of toolParts) {
         const toolName = getToolOrDynamicToolName(part);
         if (
-          (toolName === 'search_sol_database' || toolName === 'search_global_database') &&
+          (toolName === 'propose_search_sol_database' || toolName === 'propose_search_global_database') &&
           part.state === 'output-available'
         ) {
           const output = (part as any).output as {
@@ -479,21 +501,57 @@ export function useChatOrchestration({
         ?.filter(isToolOrDynamicToolUIPart)
         .some(
           (p) =>
-            (getToolOrDynamicToolName(p) === 'search_sol_database' ||
-              getToolOrDynamicToolName(p) === 'search_global_database') &&
+            (getToolOrDynamicToolName(p) === 'propose_search_sol_database' ||
+              getToolOrDynamicToolName(p) === 'propose_search_global_database') &&
             p.state !== 'output-available'
         )
     );
   }, [messages, activeQueryId, runningSearches]);
 
-  // P-15: [SISTEMA] mensagens filtradas para o chat UI
+  // P-15: filtra mensagens [SISTEMA] (instruções internas) e textos gerados após proposal
+  // tool calls (o SearchJourneyCard já é a UI canônica; o prompt proíbe texto após tools).
+  // Regra determinística — sem heurísticas de tamanho ou conteúdo.
+  //
+  // ATENÇÃO: usa abordagem iterativa (result.at(-1)) em vez de visible[idx-1].
+  // O motivo: quando visible contém uma mensagem vazia (step[1] de request anterior)
+  // que seria suprimida, ela ainda aparece como `prev` para a mensagem seguinte se
+  // usarmos índice — causando o "header vazio" antes do card de proposta.
   const displayMessages = useMemo((): UIMessage[] => {
-    return messages.filter((m) => {
-      const textPart = m.parts?.find((p) => p.type === 'text') as
-        | { type: 'text'; text: string }
-        | undefined;
-      return !(m.role === 'user' && textPart?.text.startsWith('[SISTEMA]'));
+    const visible = messages.filter((m) => {
+      if (m.role !== 'user') return true;
+      const text = (m.parts?.find((p) => p.type === 'text') as any)?.text ?? '';
+      return !text.startsWith('[SISTEMA]');
     });
+
+    const result: UIMessage[] = [];
+    for (const m of visible) {
+      if (m.role !== 'assistant') {
+        result.push(m);
+        continue;
+      }
+      // Mensagem com tool calls → sempre exibir
+      if ((m.parts?.filter(isToolOrDynamicToolUIPart) ?? []).length > 0) {
+        result.push(m);
+        continue;
+      }
+      // Texto/vazio sem tool calls: ocultar se a ÚLTIMA mensagem JÁ EXIBIDA do
+      // assistente tem proposal call. Usa result.at(-1) — não visible[idx-1] —
+      // para não tomar mensagens suprimidas como referência de "prev".
+      const lastShown = result.at(-1);
+      if (!lastShown || lastShown.role !== 'assistant') {
+        result.push(m);
+        continue;
+      }
+      const prevHasProposal = (lastShown.parts?.filter(isToolOrDynamicToolUIPart) ?? []).some(
+        (p) => {
+          const n = getToolOrDynamicToolName(p);
+          return n === 'propose_search_sol_database' || n === 'propose_search_global_database';
+        }
+      );
+      if (!prevHasProposal) result.push(m);
+      // else: suprime — não adiciona ao result
+    }
+    return result;
   }, [messages]);
 
   // ── Articles (Supabase Realtime) ────────────────────────────────────────────
@@ -505,7 +563,10 @@ export function useChatOrchestration({
     refreshByChatId: refreshArticles,
     queryStatus,
   } = useSupabaseRealtime(activeQueryId, chatId);
-
+  // Sincroniza refreshArticlesRef após useSupabaseRealtime estar disponível
+  useEffect(() => {
+    refreshArticlesRef.current = refreshArticles;
+  }, [refreshArticles]);
   const previousArticlesRef = useRef<any[]>([]);
   const previousQueryIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -525,31 +586,75 @@ export function useChatOrchestration({
     }
   }, [articles, activeQueryId]);
 
-  const displayArticles = useMemo(() => {
-    // P-rerank: aplica o mesmo score composto (citações + recência) usado no backend
-    // para que o painel reflita a mesma ordem da revisão sistemática.
-    // Fórmula: S = 0.6·log(1+cit)/log(501) + 0.4·1/(1+age)
-    // Artigos "done" são ordenados pelo score; artigos em processamento ficam no fim.
-    const CURRENT_YEAR = new Date().getFullYear();
-    const rank = (a: {
-      citationCount?: number | null;
-      publicationYear?: number | null;
-      status?: string | null;
-    }) => {
-      const TERMINAL = ['done', 'abstract_only'];
-      if (!TERMINAL.includes(a.status ?? '')) return -1; // processando → fim da lista
-      const impact = Math.log1p(Math.max(0, a.citationCount ?? 0)) / Math.log1p(500);
-      const age = Math.max(0, CURRENT_YEAR - (a.publicationYear ?? 0));
-      const recency = a.publicationYear ? 1 / (1 + age) : 0;
-      return 0.6 * impact + 0.4 * recency;
-    };
-    const sorted = (arr: typeof articles) => [...(arr ?? [])].sort((a, b) => rank(b) - rank(a));
+  // Reconstrói localExecutedIds após reload: se há artigos no banco para um queryId,
+  // a busca foi definitivamente executada. Sem isso, os cards mostrariam "Iniciando..."
+  // após refresh de página mesmo com buscas já concluídas.
+  useEffect(() => {
+    if (!articles?.length) return;
+    setLocalExecutedIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const a of articles) {
+        if (a.queryId && !next.has(a.queryId)) {
+          next.add(a.queryId);
+          changed = true;
+        }
+      }
+      return changed ? next : prev; // evita re-render desnecessário
+    });
+  }, [articles]);
 
-    if (articles && articles.length > 0) return sorted(articles);
-    if (isSearchRunning && previousArticlesRef.current.length > 0)
-      return sorted(previousArticlesRef.current);
-    return articles ?? [];
-  }, [articles, isSearchRunning]);
+  // P-ranking-sync: extrai a ordem do reranker semântico do output da tool de síntese.
+  // Quando disponível, o acervo usa esses IDs para refletir a mesma ordem da revisão.
+  // isSynthesisRunning: detecta se generate_systematic_review está em execução.
+  // Necessário para manter a PipelineStatusBar visível durante o gap entre
+  // queryStatus='done' (todos TL;DRs prontos) e o output da revisão final.
+  const isSynthesisRunning = useMemo(() => {
+    return messages.some((m) =>
+      (m.parts ?? []).some(
+        (p) =>
+          isToolOrDynamicToolUIPart(p) &&
+          getToolOrDynamicToolName(p) === 'generate_systematic_review' &&
+          (p as any).state !== 'output-available'
+      )
+    );
+  }, [messages]);
+
+  const reviewRankedIds = useMemo<string[] | null>(() => {
+    for (const msg of messages) {
+      for (const part of msg.parts ?? []) {
+        if (!isToolOrDynamicToolUIPart(part)) continue;
+        if (getToolOrDynamicToolName(part) !== 'generate_systematic_review') continue;
+        const ids = (part as any).output?.ranked_article_ids;
+        if (Array.isArray(ids) && ids.length > 0) return ids as string[];
+      }
+    }
+    return null;
+  }, [messages]);
+
+  const displayArticles = useMemo(() => {
+    const arr =
+      articles?.length ? articles
+      : isSearchRunning && previousArticlesRef.current.length ? previousArticlesRef.current
+      : articles ?? [];
+
+    if (!arr.length) return arr;
+
+    // Após síntese: usa a ordem exata do reranker semântico (backend) — P-ranking-sync
+    if (reviewRankedIds?.length) {
+      const posMap = new Map(reviewRankedIds.map((id, i) => [id, i]));
+      return [...arr].sort(
+        (a, b) => (posMap.get(a.id) ?? Infinity) - (posMap.get(b.id) ?? Infinity)
+      );
+    }
+
+    // Antes da síntese: ranking bibliométrico via lib/reranking.ts (DRY — sem fórmula duplicada).
+    // Artigos em processamento (não-terminais) ficam ao final da lista.
+    const TERMINAL = ['done', 'abstract_only'];
+    const terminal = arr.filter((a) => TERMINAL.includes(a.status ?? ''));
+    const processing = arr.filter((a) => !TERMINAL.includes(a.status ?? ''));
+    return [...rankArticles(terminal as Article[]), ...processing];
+  }, [articles, isSearchRunning, reviewRankedIds]);
 
   const panelQueryId =
     articles && articles.length > 0 ? activeQueryId : (previousQueryIdRef.current ?? activeQueryId);
@@ -622,6 +727,8 @@ export function useChatOrchestration({
 
   const reviewedQueryIdsRef = useRef<Set<string>>(new Set());
   const articleCountRef = useRef<any[]>([]);
+  // Ref do queryStatus para uso no P-14 timer (closure-safe, sem re-criar o timer)
+  const queryStatusRef = useRef<string | null>(null);
 
   // Cancela uma busca em progresso: actualiza DB via API + para o Inngest job
   const handleCancelSearch = useCallback(async (qId: string) => {
@@ -664,6 +771,11 @@ export function useChatOrchestration({
     onArticlesChange(articles);
   }, [articles, onArticlesChange]);
 
+  // Mantém queryStatusRef sincronizado para uso nos timers (evita closure stale)
+  useEffect(() => {
+    queryStatusRef.current = queryStatus;
+  }, [queryStatus]);
+
   // Dispara síntese ou mensagem de refinamento baseado no status REAL da query no DB.
   // RAZÃO: o Inngest processa artigos em batches de 3. Quando o batch 1 terminava com
   //        todos seus artigos prontos, o trigger anterior (via status de artigos no cliente)
@@ -697,6 +809,21 @@ export function useChatOrchestration({
         }
       }
 
+      // Helper: dispara a mensagem [SISTEMA] de síntese dado o array de artigos disponíveis
+      const dispatchSynthesisMessage = (arts: any[]) => {
+        const isIncremental = arts.some((a: any) => a.queryId !== activeQueryId);
+        if (isIncremental) {
+          const cnt = arts.filter((a: any) => a.queryId === activeQueryId).length;
+          sendMessageRef.current({
+            text: `[SISTEMA] A busca adicional foi concluída: ${cnt} novo(s) artigo(s) processado(s). Chame generate_systematic_review com o parâmetro mode:"incremental" e gere uma análise CURTA (máx. 3 parágrafos) destacando o que os novos artigos confirmam, contradizem ou complementam em relação à síntese anterior. NÃO replique toda a revisão anterior — foque apenas nas novas contribuições.`,
+          });
+        } else {
+          sendMessageRef.current({
+            text: `[SISTEMA] Todos os artigos foram processados. Por favor, gere agora a revisão sistemática consolidada chamando a ferramenta generate_systematic_review.`,
+          });
+        }
+      };
+
       const currentArts = articleCountRef.current ?? [];
       const hasContent = currentArts.some(
         (a: any) =>
@@ -704,23 +831,32 @@ export function useChatOrchestration({
           (a.status === 'done' || a.status === 'abstract_only') &&
           a.tldrContent
       );
-      if (!hasContent) return; // sem artigos com TL;DR — não gera síntese
 
-      const isIncremental = currentArts.some((a: any) => a.queryId !== activeQueryId);
+      if (hasContent) {
+        setTimeout(() => dispatchSynthesisMessage(currentArts), 500);
+        return;
+      }
 
-      setTimeout(() => {
-        if (isIncremental) {
-          const cnt = currentArts.filter((a: any) => a.queryId === activeQueryId).length;
-          sendMessageRef.current({
-            text: `[SISTEMA] A busca adicional foi concluída: ${cnt} novo(s) artigo(s) processado(s). Chame generate_systematic_review e gere uma análise incremental CURTA (máx. 3 parágrafos) destacando o que os novos artigos confirmam, contradizem ou complementam em relação à síntese anterior. NÃO replique toda a revisão anterior — foque apenas nas novas contribuições.`,
-          });
-        } else {
-          sendMessageRef.current({
-            text: `[SISTEMA] Todos os artigos foram processados. Por favor, gere agora a revisão sistemática consolidada chamando a ferramenta generate_systematic_review.`,
-          });
-        }
-      }, 500);
-      return;
+      // Race condition: queryStatus=done chegou via Realtime ANTES dos eventos INSERT
+      // de artigos (comum em buscas globais com cache hit, onde INSERT + UPDATE ocorrem
+      // em ~134ms). Fallback: consulta direta ao Supabase após 2s.
+      // `cancelled` garante que a IIFE async não chame sendMessage se o componente
+      // desmontar antes dos 2s (cleanup do useEffect seta cancelled=true).
+      let cancelled = false;
+      void (async () => {
+        await new Promise<void>((r) => setTimeout(r, 2_000));
+        if (cancelled) return;
+        const { data: dbArts } = await supabase
+          .from('articles')
+          .select('id, query_id, status, tldr_content')
+          .eq('query_id', activeQueryId)
+          .in('status', ['done', 'abstract_only']);
+        if (cancelled || !dbArts?.some((a) => a.tldr_content)) return;
+        // Combina artigos do DB com o ref atualizado (captura queries incrementais)
+        const merged = [...(articleCountRef.current ?? []), ...dbArts];
+        dispatchSynthesisMessage(merged);
+      })();
+      return () => { cancelled = true; };
     }
 
     if (queryStatus === 'needs_refinement') {
@@ -734,19 +870,23 @@ export function useChatOrchestration({
 
       // Fase C (IA-04): mesma lógica de automação da falha via API.
       // Este caminho é acionado pelo Supabase Realtime após o RelevanceGate do Inngest.
-      solSearchFailureCountRef.current += 1;
+      // Fase C (A-5): guard idempotente — mesma proteção do caminho API acima.
+      if (!failureCountedRef.current.has(activeQueryId)) {
+        failureCountedRef.current.add(activeQueryId);
+        solSearchFailureCountRef.current += 1;
+      }
       const failCount = solSearchFailureCountRef.current;
       setSuggestionChips(NEEDS_REFINEMENT_CHIPS);
       setTimeout(() => {
         if (failCount === 1) {
           // 1ª falha (RelevanceGate rejeitou): AI relança SOL automaticamente
           sendMessageRef.current({
-            text: `[SISTEMA] Os artigos encontrados não têm relevância suficiente para o tema (rejeitados pelo gate de qualidade). Chame IMEDIATAMENTE propose_search_sol_database com o MESMO tópico da conversa e queries:[]. O agente de estratégia já sabe quais queries foram usadas e vai diversificar os termos. Antes de chamar a tool, escreva EXATAMENTE UMA frase curta em Português informando ao usuário que os artigos encontrados não eram relevantes e que você está tentando automaticamente com uma estratégia diferente.`,
+            text: `[SISTEMA] Os artigos encontrados não têm relevância suficiente para o tema (rejeitados pelo gate de qualidade). Chame IMEDIATAMENTE propose_search_sol_database com o MESMO tópico da conversa e queries:[]. O agente de estratégia já sabe quais queries foram usadas e vai diversificar os termos. NÃO escreva nada — chame a tool diretamente.`,
           });
         } else {
           // 2ª+ falha: AI escala para OpenAlex automaticamente
           sendMessageRef.current({
-            text: `[SISTEMA] Após ${failCount} tentativas na base SOL sem resultados relevantes para o tema, chame IMEDIATAMENTE propose_search_global_database com o tópico da conversa em inglês/conceitos. Antes de chamar a tool, escreva EXATAMENTE DUAS frases em Português: (1) mencione que após várias tentativas a SOL não encontrou artigos suficientemente relevantes, (2) explique que está expandindo automaticamente para a base global OpenAlex (+250 milhões de artigos científicos).`,
+            text: `[SISTEMA] Após ${failCount} tentativas na base SOL sem resultados relevantes para o tema, chame IMEDIATAMENTE propose_search_global_database com o tópico da conversa em inglês/conceitos. NÃO escreva nada — chame a tool diretamente.`,
           });
         }
       }, 300);
@@ -756,22 +896,39 @@ export function useChatOrchestration({
   // Auto-sugestão de busca global quando zero resultados na SOL
   useEffect(() => {
     if (hasZeroResults && activeQueryId && !reviewedQueryIdsRef.current.has(activeQueryId)) {
+      // Guard: não disparar se já existe uma proposta global — significa que o erro
+      // veio de uma busca global (502/0), não de uma busca SOL sem resultados.
+      const hasGlobalProposal = messages.some((m) =>
+        m.parts?.filter(isToolOrDynamicToolUIPart).some(
+          (p) => getToolOrDynamicToolName(p) === 'propose_search_global_database'
+        )
+      );
+      if (hasGlobalProposal) return;
+
       reviewedQueryIdsRef.current.add(activeQueryId);
       const t = setTimeout(() => {
         sendMessageRef.current({
-          text: `[SISTEMA] A busca no acervo SOL não retornou resultados para o tema solicitado. Chame IMEDIATAMENTE a tool propose_search_global_database. Depois, escreva 2 frases curtas para o usuário: (1) explique que o acervo SOL não encontrou artigos para esse tema, e (2) diga que está propondo uma busca na base global OpenAlex, que indexa +250 milhões de trabalhos científicos.`,
+          text: `[SISTEMA] A busca no acervo SOL não retornou resultados para o tema solicitado. Chame IMEDIATAMENTE a tool propose_search_global_database. NÃO escreva nada — chame a tool diretamente.`,
         });
       }, 500);
       return () => clearTimeout(t);
     }
-  }, [hasZeroResults, activeQueryId]);
+  }, [hasZeroResults, activeQueryId, messages]);
 
   // P-14: Safety net 60s com cleanup correto para evitar memory leak após navegação
+  // Fase (P-14-fix): NÃO disparar se queryStatus ainda for 'processing' ou 'searching'
+  // — indica que o Inngest ainda processa, artigos apenas não chegaram via Realtime.
   const zeroResultsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!activeQueryId || isLoading || hasZeroResults) return;
     zeroResultsTimerRef.current = setTimeout(() => {
-      if (articleCountRef.current.length === 0 && !reviewedQueryIdsRef.current.has(activeQueryId)) {
+      const qStatus = queryStatusRef.current;
+      const isStillProcessing = qStatus === 'processing' || qStatus === 'searching';
+      if (
+        !isStillProcessing &&
+        articleCountRef.current.length === 0 &&
+        !reviewedQueryIdsRef.current.has(activeQueryId)
+      ) {
         reviewedQueryIdsRef.current.add(activeQueryId);
         sendMessageRef.current({
           text: `[SISTEMA] A busca para a query ${activeQueryId} foi concluída mas nenhum artigo foi encontrado ou processado.`,
@@ -823,5 +980,7 @@ export function useChatOrchestration({
     // Status da query ativa no DB (done/needs_refinement/processing/etc.) — usado
     // pelo PipelineStatusBar para feedback global step-by-step ao usuário.
     queryStatus,
+    // true quando generate_systematic_review está em execução (para manter PipelineStatusBar)
+    isSynthesisRunning,
   };
 }

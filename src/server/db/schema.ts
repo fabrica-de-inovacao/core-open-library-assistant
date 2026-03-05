@@ -84,6 +84,8 @@ export const chatSessions = pgTable('chat_sessions', {
   // Regenerado quando messages.length - conversationSummaryCount >= KEEP_RECENT (14).
   conversationSummary: text('conversation_summary'),
   conversationSummaryCount: integer('conversation_summary_count').default(0).notNull(),
+  // Fase C (Batch 3): feedback pós-síntese por mensagem — { [messageId]: 'up' | 'down' }
+  synthesisRatings: jsonb('synthesis_ratings').$type<Record<string, 'up' | 'down'>>().default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

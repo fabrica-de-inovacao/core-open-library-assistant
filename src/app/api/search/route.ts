@@ -7,6 +7,7 @@ import { searchQueries, articles } from '@/server/db/schema';
 import { auth } from '@/auth';
 import { inngest } from '@/server/inngest/client';
 import { rateLimit, getClientIp } from '@/lib/rate-limit';
+import { logger } from '@/lib/logger';
 
 // F-04: 10 buscas por minuto por usuário/IP
 const searchLimiter = rateLimit({ limit: 10, windowMs: 60_000 });
@@ -47,12 +48,12 @@ async function fetchSOLPage(
     }).finally(() => clearTimeout(timeout));
 
     if (!response.ok) {
-      console.warn(`[Search] ❌ SOL q="${q.slice(0, 30)}" pág.${page}: HTTP ${response.status}`);
+      logger.warn(`[Search] ❌ SOL q="${q.slice(0, 30)}" pág.${page}: HTTP ${response.status}`);
       return [];
     }
 
     const html = await response.text();
-    console.log(`[Search] 🌐 SOL q="${q.slice(0, 30)}" pág.${page} | HTML ${html.length} chars`);
+    logger.debug(`[Search] 🌐 SOL q="${q.slice(0, 30)}" pág.${page} | HTML ${html.length} chars`);
 
     const $ = cheerio.load(html);
     const results: Array<{
@@ -87,11 +88,11 @@ async function fetchSOLPage(
       }
     });
 
-    console.log(`[Search] 🔍 SOL q="${q.slice(0, 30)}" pág.${page}: ${results.length} artigo(s)`);
+    logger.debug(`[Search] 🔍 SOL q="${q.slice(0, 30)}" pág.${page}: ${results.length} artigo(s)`);
     return results;
   } catch (err) {
     const isAbort = (err as Error).name === 'AbortError';
-    console.warn(
+    logger.warn(
       `[Search] ⏱️ SOL q="${q.slice(0, 30)}" pág.${page} ${isAbort ? 'timeout (20s)' : 'erro'}: ${(err as Error).message}`
     );
     return [];
@@ -141,11 +142,9 @@ export async function GET(request: Request) {
 
     const combinedQuery = qs.join(' | ');
     const userId = session?.user?.id ?? null;
-    console.log(
-      `\n[SEARCH_VERIFY_V2] ⚡ NOVA BUSCA INICIADA: ${qs.length} queries | userId: ${userId ?? 'anon'}`
-    );
-    console.log(`[Search Trace] Referer:`, request.headers.get('referer'));
-    console.log(`[Search Trace] User-Agent:`, request.headers.get('user-agent'));
+    logger.info(`[Search] ⚡ Nova busca: ${qs.length} queries | userId: ${userId ?? 'anon'}`);
+    logger.debug(`[Search Trace] Referer:`, request.headers.get('referer'));
+    logger.debug(`[Search Trace] User-Agent:`, request.headers.get('user-agent'));
 
     // NOTA: O cache de query-level foi removido intencionalmente.
     // Motivo: _checkAndMarkQueryDone marca 'done' mesmo quando todos os artigos são 'failed',
@@ -162,7 +161,7 @@ export async function GET(request: Request) {
         .update(searchQueries)
         .set({ status: 'searching' })
         .where(eq(searchQueries.id, queryId));
-      console.log(`[Search] 📝 QueryID recebido e atualizado para searching: ${queryId}`);
+      logger.debug(`[Search] 📝 QueryID recebido → searching: ${queryId}`);
     } else {
       const [insertedQuery] = await db
         .insert(searchQueries)
@@ -173,14 +172,14 @@ export async function GET(request: Request) {
         })
         .returning();
       queryId = insertedQuery.id;
-      console.log(`[Search] 📝 QueryID criado: ${queryId}`);
+      logger.info(`[Search] 📝 QueryID criado: ${queryId}`);
     }
 
     // 2. Scraping Logic — todas as páginas em paralelo (G1: elimina serial await-in-loop)
     const MAX_PAGES = 2; // páginas 1 e 2 por sub-query
     const MAX_TOTAL_RESULTS = 25;
 
-    console.log(`[Search] 🚀 Buscando ${qs.length} queries × ${MAX_PAGES} páginas em paralelo`);
+    logger.info(`[Search] 🚀 Buscando ${qs.length} queries × ${MAX_PAGES} páginas em paralelo`);
     const tasks = qs.flatMap((q) => [1, 2].map((page) => fetchSOLPage(q, page)));
     const settled = await Promise.allSettled(tasks);
 
@@ -211,12 +210,12 @@ export async function GET(request: Request) {
     const tldrLang = searchParams.get('tldr_lang') ?? 'pt-BR';
 
     const limitedResults = allResults.slice(0, articleLimit);
-    console.log(
-      `[Search] \uD83D\uDCCA Limite de artigos: ${articleLimit} | Idioma TL;DR: ${tldrLang} | Total: ${limitedResults.length}`
+    logger.debug(
+      `[Search] 📊 Limite: ${articleLimit} | TL;DR lang: ${tldrLang} | Total: ${limitedResults.length}`
     );
 
     // 3. Insert into Database with DOI deduplication
-    console.log(`[Search] 📊 Total após scraping: ${limitedResults.length} artigos`);
+    logger.info(`[Search] 📊 Total após scraping: ${limitedResults.length} artigos`);
 
     const newArticleIds: string[] = [];
 
@@ -273,8 +272,8 @@ export async function GET(request: Request) {
         }
       }
 
-      console.log(
-        `[Search] ♻️ ${toInsertCached.length} artigos em cache (DOI match) | ${toInsertFresh.length} artigos novos para extração`
+      logger.info(
+        `[Search] ♻️ ${toInsertCached.length} em cache | ${toInsertFresh.length} novos para extração`
       );
 
       // P-10: onConflictDoUpdate atualiza metadata enriquecida caso o artigo já exista
@@ -316,7 +315,7 @@ export async function GET(request: Request) {
               updatedAt: sql`now()`,
             },
           });
-        console.log(`[Search] ✅ ${cachedRows.length} artigos em cache inseridos sem re-extração`);
+        logger.info(`[Search] ✅ ${cachedRows.length} artigos de cache inseridos`);
       }
 
       // Insert fresh articles (need Inngest processing)
@@ -336,9 +335,7 @@ export async function GET(request: Request) {
             }))
           )
           .onConflictDoNothing();
-        console.log(
-          `[Search] ✅ ${toInsertFresh.length} artigos novos inseridos com status pending`
-        );
+        logger.info(`[Search] ✅ ${toInsertFresh.length} artigos novos inseridos (pending)`);
 
         // Fetch only the pending IDs (fresh ones) to dispatch to Inngest
         const pendingArticles = await db
@@ -348,7 +345,7 @@ export async function GET(request: Request) {
         newArticleIds.push(...pendingArticles.map((a) => a.id));
       }
     } else {
-      console.warn(`[Search] ⚠️ Nenhum artigo encontrado — DB insert ignorado`);
+      logger.warn(`[Search] ⚠️ Nenhum artigo encontrado — DB insert ignorado`);
     }
 
     // Pré-verificação de quantidade mínima:
@@ -367,8 +364,8 @@ export async function GET(request: Request) {
         .update(searchQueries)
         .set({ status: 'needs_refinement' })
         .where(eq(searchQueries.id, queryId));
-      console.log(
-        `[Search] ⚠️ Poucos resultados (${limitedResults.length} < ${MIN_USEFUL_ARTICLES}) — needs_refinement, artigos marcados como failed, Inngest não acionado`
+      logger.warn(
+        `[Search] ⚠️ Poucos resultados (${limitedResults.length} < ${MIN_USEFUL_ARTICLES}) — needs_refinement`
       );
       return NextResponse.json({
         success: true,
@@ -399,13 +396,13 @@ export async function GET(request: Request) {
           user_id: userId ?? 'anonymous',
         },
       });
-      console.log(
-        `[Search] 🚀 1 evento enviado ao Inngest com ${newArticleIds.length} artigo(s) | query_id=${queryId}`
+      logger.info(
+        `[Search] 🚀 Ingestado ${newArticleIds.length} artigo(s) | query_id=${queryId}`
       );
     } else if (limitedResults.length > 0) {
       // All articles were served from cache — mark query as done immediately
       await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
-      console.log(`[Search] ✅ Todos os artigos vieram do cache — query marcada como done`);
+      logger.info(`[Search] ✅ Todos os artigos vieram do cache — done`);
     }
 
     return NextResponse.json({
@@ -416,7 +413,7 @@ export async function GET(request: Request) {
       query_id: queryId,
     });
   } catch (error: unknown) {
-    console.error('Error in /api/search:', error);
+    logger.error('[Search] Erro interno:', error);
     return NextResponse.json(
       { success: false, error: 'Ocorreu um erro interno durante a busca.' },
       { status: 500 }

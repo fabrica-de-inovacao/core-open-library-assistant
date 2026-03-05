@@ -14,6 +14,7 @@ import { db } from '@/server/db';
 import { chatSessions, searchQueries, articles } from '@/server/db/schema';
 import { inngest } from '@/server/inngest/client';
 import { CrossRefResponseSchema } from '@/lib/schemas/crossref';
+import { logger } from '@/lib/logger';
 
 // Regex permissivo para validação básica de DOI (10.xxxx/qualquer-coisa)
 const DOI_REGEX = /^10\.\d{4,}(\.\d+)*\/\S+$/;
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest) {
     keywords = [...(work.keyword ?? []), ...(work.subject ?? [])].join(', ') || null;
   } catch (err) {
     const isAbort = (err as Error).name === 'AbortError';
-    console.error(`[add-by-doi] CrossRef ${isAbort ? 'timeout' : 'erro'}:`, err);
+    logger.error(`[add-by-doi] CrossRef ${isAbort ? 'timeout' : 'erro'}:`, err);
     return NextResponse.json(
       { error: isAbort ? 'CrossRef demorou muito (timeout)' : 'Falha ao consultar CrossRef' },
       { status: 503 }
@@ -166,7 +167,7 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  console.log(
+  logger.info(
     `[add-by-doi] ✅ Artigo inserido | doi=${doi} | id=${article.id} | query=${query.id}`
   );
 

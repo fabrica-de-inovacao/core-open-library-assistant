@@ -18,8 +18,8 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from 'sonner';
-import { SearchProposalCard, GlobalSearchProposalCard } from './proposals';
-import type { ExecuteSearchFn } from './proposals';
+import { SearchProposalCard, GlobalSearchProposalCard, SearchJourneyCard } from './proposals';
+import type { ExecuteSearchFn, SearchAttempt } from './proposals';
 
 // ---------------------------------------------------------------------------
 // TypingIndicator — ChatGPT style (sem bolha, avatar lateral)
@@ -115,9 +115,9 @@ function getToolStatus(
 
   if (toolName === 'generate_systematic_review') {
     // Considera concluída se: (a) SDK reportou output-available, OU
-    // (b) stream já terminou E a mensagem mãe tem texto (LLM respondeu após a tool).
-    // Isso evita o loader travado quando o SDK não transiciona o state no 2º ciclo.
-    const isDone = state === 'output-available' || (!isStreaming && hasMessageText);
+    // (b) output já existe no part (carregado do DB após reload), OU
+    // (c) stream já terminou E a mensagem mãe tem texto (LLM respondeu após a tool).
+    const isDone = state === 'output-available' || output !== undefined || (!isStreaming && hasMessageText);
     if (!isDone) {
       return {
         label: 'Gerando síntese sistemática…',
@@ -149,6 +149,10 @@ interface ChatMessageItemProps {
   onCancelSearch?: (queryId: string) => void;
   executedProposalIds?: Set<string>;
   runningSearches?: Set<string>;
+  /** Fase C (Batch 3): necessário para persistir o feedback da síntese */
+  chatId?: string | null;
+  /** Fase 3 (P-UI): jornada completa de busca — agrega proposals de todas as msgs da sessão */
+  searchJourney?: SearchAttempt[];
 }
 
 export const ChatMessageItem = React.memo(
@@ -162,10 +166,27 @@ export const ChatMessageItem = React.memo(
     onCancelSearch,
     executedProposalIds,
     runningSearches,
+    chatId,
+    searchJourney,
   }: ChatMessageItemProps) => {
     const [copied, setCopied] = useState(false);
-    // Fase C (IA-05): feedback pós-síntese
+    // Fase C (IA-05 / Batch 3): feedback pós-síntese — estado otimista local
     const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
+
+    // Fase C (Batch 3): persiste feedback na API e atualiza estado otimista
+    const handleFeedback = async (next: 'up' | 'down' | null) => {
+      setFeedback(next);
+      if (!chatId) return; // sem chatId, apenas feedback visual
+      try {
+        await fetch('/api/chat/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chatId, messageId: m.id, rating: next }),
+        });
+      } catch {
+        // falha silenciosa — o feedback visual já foi aplicado
+      }
+    };
 
     const textContent =
       (m.parts?.find((p) => p.type === 'text') as { type: 'text'; text: string } | undefined)
@@ -180,7 +201,17 @@ export const ChatMessageItem = React.memo(
     // portanto renderizamos textContent diretamente — sem typewriter manual.
     const visibleText = textContent;
 
+    const hasContent = textContent.trim().length > 0;
     const toolParts = m.parts?.filter(isToolOrDynamicToolUIPart) ?? [];
+    const hasTools = toolParts.length > 0;
+
+    // Suprime o texto redundante ("Estratégia de busca pronta…") quando a mensagem
+    // já renderiza um SearchJourneyCard — o card é a UI canônica da proposta.
+    const hasProposalCall = toolParts.some((p) => {
+      const n = getToolOrDynamicToolName(p);
+      return n === 'propose_search_sol_database' || n === 'propose_search_global_database';
+    });
+    const shouldShowText = hasContent && !hasProposalCall;
 
     const handleCopy = () => {
       navigator.clipboard.writeText(textContent);
@@ -191,9 +222,6 @@ export const ChatMessageItem = React.memo(
 
     const isUser = m.role === 'user';
     const userInitial = userName ? userName[0].toUpperCase() : 'U';
-
-    const hasContent = textContent.trim().length > 0;
-    const hasTools = toolParts.length > 0;
     if (!isUser && !hasContent && !hasTools && !isStreaming) return null;
 
     // ----------------------------------------------------------------
@@ -242,8 +270,8 @@ export const ChatMessageItem = React.memo(
             )}
           </div>
 
-          {/* Markdown prose */}
-          {hasContent && (
+          {/* Markdown prose — suprimido quando a mensagem já renderiza um SearchJourneyCard */}
+          {shouldShowText && (
             <>
               {/* ── STREAMING: texto puro sem ReactMarkdown para evitar DOM churn ── */}
               {isStreaming && (
@@ -400,37 +428,47 @@ export const ChatMessageItem = React.memo(
                 const output = (part as any).output as Record<string, any> | undefined;
                 const input = (part as any).input as Record<string, any> | undefined;
 
-                // Proposal cards interativos
+                // Proposal cards — SearchJourneyCard unificado (último) ou null (demais)
                 if (
-                  toolName === 'propose_search_sol_database' &&
+                  (toolName === 'propose_search_sol_database' ||
+                    toolName === 'propose_search_global_database') &&
                   (state === 'output-available' ||
                     state === 'input-available' ||
-                    state === 'input-streaming') &&
-                  (output?.proposed || output?.queries || input?.queries)
+                    state === 'input-streaming')
                 ) {
-                  const queries: string[] | undefined = output?.queries ?? input?.queries;
-                  const queryId: string | undefined = output?.query_id ?? undefined;
-                  if (!queries || queries.length === 0) return null;
-                  return (
-                    <SearchProposalCard
-                      key={toolCallId}
-                      queries={queries}
-                      queryId={queryId}
-                      onExecute={onExecuteSearch}
-                      onCancel={onCancelSearch}
-                      isExecuted={queryId ? executedProposalIds?.has(queryId) : false}
-                      isRunning={queryId ? (runningSearches?.has(queryId) ?? false) : false}
-                    />
-                  );
-                }
+                  // Com searchJourney: usa card unificado — só renderiza no último
+                  if (searchJourney && searchJourney.length > 0) {
+                    const lastAttempt = searchJourney[searchJourney.length - 1];
+                    if (lastAttempt.toolCallId !== toolCallId) {
+                      // Esta proposal foi superada — escondida no card unificado
+                      return null;
+                    }
+                    return (
+                      <SearchJourneyCard
+                        key={toolCallId}
+                        attempts={searchJourney}
+                        onCancel={onCancelSearch}
+                      />
+                    );
+                  }
 
-                if (
-                  toolName === 'propose_search_global_database' &&
-                  (state === 'output-available' ||
-                    state === 'input-available' ||
-                    state === 'input-streaming') &&
-                  (output?.proposed || output?.query || input?.query)
-                ) {
+                  // Fallback sem journey — cards individuais (comportamento anterior)
+                  if (toolName === 'propose_search_sol_database') {
+                    const queries: string[] | undefined = output?.queries ?? input?.queries;
+                    const queryId: string | undefined = output?.query_id ?? undefined;
+                    if (!queries || queries.length === 0) return null;
+                    return (
+                      <SearchProposalCard
+                        key={toolCallId}
+                        queries={queries}
+                        queryId={queryId}
+                        onExecute={onExecuteSearch}
+                        onCancel={onCancelSearch}
+                        isExecuted={queryId ? executedProposalIds?.has(queryId) : false}
+                        isRunning={queryId ? (runningSearches?.has(queryId) ?? false) : false}
+                      />
+                    );
+                  }
                   const query: string | undefined = output?.query ?? input?.query;
                   const queryId: string | undefined = output?.query_id ?? undefined;
                   if (!query) return null;
@@ -495,7 +533,7 @@ export const ChatMessageItem = React.memo(
                     type="button"
                     onClick={() => {
                       const next = feedback === 'up' ? null : 'up';
-                      setFeedback(next);
+                      void handleFeedback(next);
                       if (next === 'up')
                         toast.success('Obrigado pelo feedback!', { duration: 1800 });
                     }}
@@ -512,7 +550,7 @@ export const ChatMessageItem = React.memo(
                     type="button"
                     onClick={() => {
                       const next = feedback === 'down' ? null : 'down';
-                      setFeedback(next);
+                      void handleFeedback(next);
                       if (next === 'down')
                         toast.info('Feedback registrado — vamos melhorar!', { duration: 2200 });
                     }}
@@ -541,6 +579,7 @@ export const ChatMessageItem = React.memo(
     if (prevProps.userName !== nextProps.userName) return false;
     if (prevProps.executedProposalIds?.size !== nextProps.executedProposalIds?.size) return false;
     if (prevProps.runningSearches?.size !== nextProps.runningSearches?.size) return false;
+    if (prevProps.searchJourney?.length !== nextProps.searchJourney?.length) return false;
     const prevText =
       (
         prevProps.m.parts?.find((p) => p.type === 'text') as

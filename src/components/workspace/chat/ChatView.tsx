@@ -21,6 +21,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { isToolOrDynamicToolUIPart, getToolOrDynamicToolName } from 'ai';
 import { signIn } from 'next-auth/react';
 import { ChevronsDown, ChevronLeft, BookOpen } from 'lucide-react';
 import {
@@ -38,6 +39,7 @@ import { QueryHistoryBar } from '@/components/workspace/QueryHistoryBar';
 import { ChatInputBar } from '@/components/workspace/ChatInputBar';
 import { AttachContent } from '@/components/workspace/AttachContent';
 import { PipelineStatusBar } from '@/components/workspace/PipelineStatusBar';
+import type { SearchAttempt } from '@/components/workspace/proposals';
 import { useSidebar } from '@/components/ui/sidebar';
 import type { useChatOrchestration } from '@/hooks/useChatOrchestration';
 import type { useAttachments } from '@/hooks/useAttachments';
@@ -85,6 +87,7 @@ export function ChatView({
     sendMessage,
     stop,
     isLoading,
+    chatId,
     activeQueryId,
     handleExecuteSearch,
     handleCancelSearch,
@@ -94,6 +97,7 @@ export function ChatView({
     queryGroups,
     hasZeroResults,
     isSearchRunning,
+    isSynthesisRunning,
     realtimeStatus,
     suggestionChips,
     clearSuggestionChips,
@@ -177,8 +181,11 @@ export function ChatView({
         return;
       }
       if (!input.trim()) return;
+      // Fase C (segurança): strip do prefixo reservado [SISTEMA] — previne injeção de instruções
+      const safeText = input.replace(/^\[SISTEMA\]/gi, '').trim();
+      if (!safeText) return;
       clearSuggestionChips();
-      sendMessage({ text: input });
+      sendMessage({ text: safeText });
       setInput('');
       attachments.clearChips();
     },
@@ -187,6 +194,53 @@ export function ChatView({
 
   // ── Chips de sugestão rápida ─────────────────────────────────────────────
   const chipsList = useMemo(() => suggestionChips ?? [], [suggestionChips]);
+
+  // Fase 3 (P-UI): jornada unificada de busca — agrega proposals de todas as mensagens
+  const searchJourney = useMemo<SearchAttempt[]>(() => {
+    const result: SearchAttempt[] = [];
+    for (const msg of displayMessages) {
+      if (msg.role !== 'assistant') continue;
+      const parts = (msg.parts ?? []) as any[];
+      for (const part of parts) {
+        if (!isToolOrDynamicToolUIPart(part)) continue;
+        const toolName = getToolOrDynamicToolName(part);
+        if (
+          toolName !== 'propose_search_sol_database' &&
+          toolName !== 'propose_search_global_database'
+        ) continue;
+        const { state } = part;
+        if (!['output-available', 'input-available', 'input-streaming'].includes(state)) continue;
+        const output = (part as any).output as Record<string, any> | undefined;
+        const input = (part as any).input as Record<string, any> | undefined;
+        if (toolName === 'propose_search_sol_database') {
+          const queries: string[] | undefined = output?.queries ?? input?.queries;
+          if (!queries?.length) continue;
+          const queryId: string | undefined = output?.query_id;
+          result.push({
+            type: 'sol',
+            toolCallId: part.toolCallId,
+            queryId,
+            queries,
+            isExecuted: queryId ? (executedProposalIds?.has(queryId) ?? false) : false,
+            isRunning: queryId ? (runningSearches?.has(queryId) ?? false) : false,
+          });
+        } else {
+          const query: string | undefined = output?.query ?? input?.query;
+          if (!query) continue;
+          const queryId: string | undefined = output?.query_id;
+          result.push({
+            type: 'global',
+            toolCallId: part.toolCallId,
+            queryId,
+            query,
+            isExecuted: queryId ? (executedProposalIds?.has(queryId) ?? false) : false,
+            isRunning: queryId ? (runningSearches?.has(queryId) ?? false) : false,
+          });
+        }
+      }
+    }
+    return result;
+  }, [displayMessages, executedProposalIds, runningSearches]);
   const handleSuggestionClick = useCallback((text: string) => setInput(text), []);
 
   // ── Navegação no histórico de queries ────────────────────────────────────
@@ -236,6 +290,8 @@ export function ChatView({
                     onCancelSearch={handleCancelSearch}
                     executedProposalIds={executedProposalIds}
                     runningSearches={runningSearches}
+                    chatId={chatId}
+                    searchJourney={searchJourney}
                   />
                 ))}
                 {isLoading && displayMessages.at(-1)?.role !== 'assistant' && <TypingIndicator />}
@@ -263,6 +319,8 @@ export function ChatView({
               articles={articles}
               activeQueryId={activeQueryId}
               queryStatus={queryStatus}
+              isSynthesisRunning={isSynthesisRunning}
+              hasZeroResults={hasZeroResults}
             />
 
             {/* Barra de input */}

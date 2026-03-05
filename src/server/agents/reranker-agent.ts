@@ -13,8 +13,9 @@
  */
 
 import { generateText } from 'ai';
-import { getModelForTask, getModelIdForTask } from '@/lib/ai-provider';
+import { getModelForTask } from '@/lib/ai-provider';
 import type { Article } from '@/lib/reranking';
+import { logger } from '@/lib/logger';
 
 export interface RankedArticle {
   article: Article;
@@ -37,8 +38,8 @@ export async function runRerankerAgent(articles: Article[], topic: string): Prom
 
   const candidates = articles.slice(0, 25); // teto para controle de custo (até 25 artigos)
 
-  console.log(
-    `[RerankerAgent] 🔍 Avaliando relevância | artigos=${candidates.length} | topic="${topic.slice(0, 60)}" | model=${getModelIdForTask('reranker')}`
+  logger.info(
+    `[RerankerAgent] 🔍 Reranking | artigos=${candidates.length} | topic="${topic.slice(0, 60)}"`
   );
 
   const articleList = candidates
@@ -74,12 +75,12 @@ Retorne o array JSON com os índices ordenados por relevância semântica ao tó
       rerankedIds = parsed.filter((i) => typeof i === 'number' && i >= 0 && i < candidates.length);
     }
   } catch (err) {
-    console.warn('[RerankerAgent] ⚠️ Falha no reranking semântico — mantendo ordem original:', err);
+    logger.warn('[RerankerAgent] ⚠️ Falha no reranking semântico — mantendo ordem original:', err);
     return articles;
   }
 
   if (rerankedIds.length === 0) {
-    console.warn('[RerankerAgent] ⚠️ Array de índices vazio — mantendo ordem original');
+    logger.warn('[RerankerAgent] ⚠️ Array de índices vazio — mantendo ordem original');
     return articles;
   }
 
@@ -91,7 +92,7 @@ Retorne o array JSON com os índices ordenados por relevância semântica ao tó
   // Artigos além de candidates (> 15) ficam ao final
   const tail = articles.slice(25);
 
-  console.log(`[RerankerAgent] ✅ Reranking concluído | ${reranked.length} artigos reordenados`);
+  logger.info(`[RerankerAgent] ✅ Reranking concluído | ${reranked.length} artigos reordenados`);
 
   return [...reranked, ...remaining, ...tail];
 }

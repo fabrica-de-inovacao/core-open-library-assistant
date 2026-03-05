@@ -15,6 +15,7 @@ import { generateText } from 'ai';
 import { getModelForTask, getModelIdForTask } from '@/lib/ai-provider';
 import { profileQuery } from '@/server/agents/query-profiler';
 import { retrieveUseCaseExamples } from '@/server/agents/use-case-rag';
+import { logger } from '@/lib/logger';
 
 export interface StrategyResult {
   queries: string[];
@@ -33,18 +34,21 @@ export interface StrategyResult {
 export async function runStrategyAgent(
   topic: string,
   rawQueries: string[] = [],
-  previousFailedQueries: string[] = []
+  previousFailedQueries: string[] = [],
+  /** Fase C (Batch 4 C-2): sobrescreve o número máximo de queries geradas */
+  maxQueriesOverride?: number
 ): Promise<StrategyResult> {
-  console.log(
+  logger.debug(
     `[StrategyAgent] 🗺️  Planejando estratégia | topic="${topic.slice(0, 60)}" | model=${getModelIdForTask('strategy')}`
   );
 
   // Fase B (IA-02): Profila a query para calibrar o número de strings a gerar.
   const profile = profileQuery(topic);
-  const maxQueries = profile.suggestedQueryCount;
+  // Fase C (Batch 4 C-2): cap externo tem prioridade sobre o perfil da query
+  const maxQueries = maxQueriesOverride ?? profile.suggestedQueryCount;
   const profileContext = profile.summary;
 
-  console.log(`[StrategyAgent] 🔍 Perfil da query: ${profileContext}`);
+  logger.debug(`[StrategyAgent] 🔍 Perfil da query: ${profileContext}`);
 
   // Fase B (IA-03): Use-Case RAG — recupera exemplos similares como few-shot context
   const fewShotContext = retrieveUseCaseExamples(topic, 2);
@@ -74,7 +78,7 @@ REGRAS:
 5. ${maxQueries >= 2 ? 'Inclua pelo menos 1 query em português e 1 em inglês.' : 'Gere a query no idioma mais relevante para o tópico (português se o contexto é nacional, inglês se for internacional).'}
 6. Não inclua operadores NOT a menos que seja essencial para filtrar ruído conhecido.
 7. As queries devem ser compatíveis com SBC OpenLib e OpenAlex.
-8. NOMES PRÓPRIOS (projetos, programas, siglas, instituições): PRESERVE-OS exatamente como fornecidos entre aspas duplas — NUNCA os traduza. Ex.: "Sereias Digitais", "ProInfo", "ENEM".
+8. NOMES PRÓPRIOS (projetos, programas, siglas, instituições): PRESERVE-OS exatamente entre aspas duplas — NUNCA os traduza nem acrescente variações OR como tradução. ✅ OK: "Sereias Digitais" AND (educação OR ensino) | ❌ PROIBIDO: "Sereias Digitais" OR "Digital Mermaids" (tradução como OR). Ex. corretos: "ProInfo", "ENEM".
 9. Retorne APENAS o JSON. Sem texto extra.`,
     prompt: `Tópico de pesquisa: "${topic}"${rawSection}${failedSection}
 ${profileContext}${fewShotContext}
@@ -95,10 +99,10 @@ Gere as strings de busca booleana otimizadas:`,
       rationale = parsed.rationale ?? '';
     }
   } catch (err) {
-    console.warn('[StrategyAgent] ⚠️ Falha ao parsear JSON — usando queries originais:', err);
+    logger.warn('[StrategyAgent] ⚠️ Falha ao parsear JSON — usando queries originais:', err);
   }
 
-  console.log(`[StrategyAgent] ✅ Estratégia definida | ${queries.length} queries geradas`);
+  logger.info(`[StrategyAgent] ✅ ${queries.length} queries geradas`);
 
   return { queries, rationale };
 }
