@@ -18,8 +18,7 @@ const doiSchema = z.object({
   query_id: z.string().describe('query_id ativo atual para vincular o artigo recherché'),
 });
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function buildAddArticleByDoiTool(_ctx: ToolContext) {
+export function buildAddArticleByDoiTool(ctx: ToolContext) {
   return tool({
     description:
       'Adiciona manualmente um artigo à pesquisa atual usando o seu DOI. Busca metadados no CrossRef e dispara o processamento automático (TL;DR + extração).',
@@ -108,7 +107,7 @@ export function buildAddArticleByDoiTool(_ctx: ToolContext) {
         const { inngest } = await import('@/server/inngest/client');
         await inngest.send({
           name: 'app/process.articles.batch',
-          data: { query_id, article_ids: [inserted.id] },
+          data: { query_id, article_ids: [inserted.id], user_id: ctx.sessionUserId ?? 'anonymous' },
         });
 
         logger.info(`[Tool] add_article_by_doi OK | id=${inserted.id} | title=${title}`);

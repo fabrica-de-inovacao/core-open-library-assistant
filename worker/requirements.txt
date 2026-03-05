@@ -1,13 +1,18 @@
+# Runtime
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
-pymupdf
-markitdown[pdf]
-pytesseract
-pdf2image
-python-dotenv
-Pillow
+
+# Extração de PDF
+pymupdf               # PyMuPDF via MuPDF (C) — correto para fontes LaTeX Type1/Type3
+pytesseract           # OCR fallback para PDFs escaneados
+pdf2image             # converte páginas PDF para imagem (necessita poppler no sistema)
+Pillow                # dependência de pdf2image + pytesseract
+
+# HTTP + parsing
 httpx
 beautifulsoup4
-# onnxruntime-gpu é instalado via Dockerfile após markitdown para garantir precedência.
-# Listado aqui para documentação — o Dockerfile gerencia a instalação corretamente.
+lxml                  # parser HTML mais rápido que html.parser (BeautifulSoup)
+
+# Utilitários
+python-dotenv

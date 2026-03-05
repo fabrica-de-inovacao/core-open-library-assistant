@@ -162,6 +162,7 @@ export async function POST(req: NextRequest) {
     data: {
       query_id: query.id,
       article_ids: [article.id],
+      user_id: userId,
     },
   });
 

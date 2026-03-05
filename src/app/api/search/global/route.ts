@@ -437,10 +437,11 @@ export async function GET(request: Request) {
       for (let i = 0; i < newArticleIds.length; i += batchSize) {
         const batch = newArticleIds.slice(i, i + batchSize);
         events.push({
-          name: 'app/process.articles.batch',
+          name: 'app/process.articles.batch' as const,
           data: {
             query_id: queryId,
             article_ids: batch,
+            user_id: userId ?? 'anonymous',
           },
         });
       }
