@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1771886417737,
+      "tag": "0000_fantastic_cable",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1772041585645,
+      "tag": "0001_confused_justice",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772066648882,
+      "tag": "0002_add_article_enrichment",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1740873600000,
+      "tag": "0003_chat_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1740960000000,
+      "tag": "0004_add_abstract_embedding",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1772332800000,
+      "tag": "0005_pgvector_and_url_idx",
+      "breakpoints": true
+    }
+  ]
+}

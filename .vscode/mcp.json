@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "serena": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena-mcp-server",
+        "--context",
+        "ide",
+        "--project",
+        "c:/Users/FAB-PRO/Documents/GitHub/sol-open-library-assistant"
+      ]
+    }
+  }
+}

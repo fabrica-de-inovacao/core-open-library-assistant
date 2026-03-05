@@ -1,0 +1,18 @@
+# Runtime
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Extração de PDF
+pymupdf               # PyMuPDF via MuPDF (C) — correto para fontes LaTeX Type1/Type3
+pytesseract           # OCR fallback para PDFs escaneados
+pdf2image             # converte páginas PDF para imagem (necessita poppler no sistema)
+Pillow                # dependência de pdf2image + pytesseract
+
+# HTTP + parsing
+httpx
+beautifulsoup4
+lxml                  # parser HTML mais rápido que html.parser (BeautifulSoup)
+
+# Utilitários
+python-dotenv

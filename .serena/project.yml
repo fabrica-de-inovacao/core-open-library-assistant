@@ -1,0 +1,98 @@
+# Configuração do projeto Serena
+# SOL Open Library Assistant
+
+# Nome pelo qual o projeto pode ser referenciado no Serena
+project_name: 'sol-open-library-assistant'
+
+# Linguagens para as quais os language servers são iniciados.
+# TypeScript é o primário (Next.js app). Python cobre o worker em /worker.
+# Para JavaScript/TypeScript, usar "typescript".
+languages:
+  - typescript
+  - python
+
+# Encoding dos arquivos fonte
+encoding: 'utf-8'
+
+# Backend de linguagem (LSP padrão para VS Code)
+language_backend: LSP
+
+# Respeitar .gitignore do projeto
+ignore_all_files_in_gitignore: true
+
+# Caminhos adicionais a ignorar (além do .gitignore)
+ignored_paths:
+  - '.next/**'
+  - 'node_modules/**'
+  - 'worker/__pycache__/**'
+  - 'src/server/db/migrations/meta/**'
+  - 'public/**'
+
+# whether the project is in read-only mode
+# If set to true, all editing tools will be disabled and attempts to use them will result in an error
+# Added on 2025-04-18
+read_only: false
+
+# Ferramentas excluídas (nenhuma por padrão)
+excluded_tools: []
+
+# Ferramentas opcionais a incluir
+included_optional_tools: []
+
+# Modos base (sempre ativos, independente de parâmetros CLI)
+base_modes: []
+
+# Modos padrão (podem ser sobrescritos via CLI)
+default_modes:
+  - 'interactive'
+  - 'editing'
+
+# initial prompt for the project. It will always be given to the LLM upon activating the project
+# (contrary to the memories, which are loaded on demand).
+initial_prompt: |
+  Este é o projeto **SOL Open Library Assistant**, uma plataforma de revisão sistemática
+  de literatura científica com IA.
+
+  ## Stack principal
+  - **Frontend/Backend:** Next.js 16.1.6 (App Router) + React 19 + TypeScript
+  - **IA:** Vercel AI SDK `ai@6` + `@ai-sdk/google@3` + `@ai-sdk/openai@3`
+  - **LLMs:** Gemini 2.5 Flash (orquestrador/síntese), Gemini 1.5 Flash (TL;DR/reranker)
+  - **Banco de dados:** PostgreSQL via Supabase + Drizzle ORM
+  - **Fila:** Inngest (fan-out, concurrency=3, retries=2)
+  - **Realtime:** Supabase WebSocket (`postgres_changes`)
+  - **Auth:** Auth.js v5 beta, Google OAuth
+  - **Worker Python:** FastAPI + PyMuPDF + MarkItDown + Tesseract OCR + ONNX GPU auto-detect
+
+  ## Estrutura de diretórios chave
+  - `src/app/api/chat/` — Route Handler principal (streamText, tool calling)
+  - `src/app/api/search/` — Busca SOL (Cheerio) + `/global` (OpenAlex)
+  - `src/server/db/` — Schema Drizzle + migrations (5 arquivos)
+  - `src/server/inngest/` — Pipeline de processamento de artigos (batch TL;DR + embedding)
+  - `src/server/tools/` — Tool builders isolados (propose-search, add-article, generate-review)
+  - `src/server/agents/` — Agentes isolados (synthesis, reranker, strategy)
+  - `src/hooks/useChatOrchestration.ts` — Orquestração central do chat (P-06 extraído)
+  - `src/app/workspace/` — UI principal (page.tsx ~360 linhas pós-refactor)
+  - `worker/` — Microsserviço Python de extração de PDF
+  - `docs/analise-tecnica/` — Análise técnica e roadmap de melhorias
+
+  ## Estado atual do plano (02/03/2026)
+  - **Fase 0 ✅** — Hotfixes críticos (userId, embedding API v1, WebSocket payload)
+  - **Fase 1 ✅** — Arquitetura chat_sessions (eliminou race conditions)
+  - **Fase 2 ✅** — Qualidade de código (God Component → hook, tools separados)
+  - **Fase 3 ⏳** — Features pendentes: P-10 (upsert DOI), P-19 (pgvector), P-20 (paginação), P-21 (export), P-22 (seleção de modelo)
+
+  ## Notas de infra
+  - Worker Python: `yarn worker:up` funciona em CPU (WSL2). Para GPU: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d python-worker`
+  - Migration `0004_add_abstract_embedding.sql` existente mas NÃO aplicada via Drizzle Kit (pendente P-19)
+
+  ## Regras de desenvolvimento
+  - Responder SEMPRE em Português do Brasil
+  - NUNCA atualizar versões do AI SDK sem análise explícita
+  - Manter padrão de comentários `// Fase X (P-XX)` para rastreabilidade
+  - Ver `docs/analise-tecnica/gaps-e-melhorias.md` para o tracker completo
+# Orçamento de tempo por tool call para informações de símbolo (null = usa global)
+symbol_info_budget:
+
+# fixed set of tools to use as the base tool set (if non-empty), replacing Serena's default set of tools.
+# This cannot be combined with non-empty excluded_tools or included_optional_tools.
+fixed_tools: []

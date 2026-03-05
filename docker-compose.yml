@@ -1,0 +1,20 @@
+services:
+  python-worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    ports:
+      - '8000:8000'
+    # Em dev: monta o código para hot-reload sem rebuild de imagem.
+    # Em produção (Oracle): remover este volume — a imagem já contém o código.
+    volumes:
+      - ./worker:/app
+    env_file:
+      - ./worker/.env.worker
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

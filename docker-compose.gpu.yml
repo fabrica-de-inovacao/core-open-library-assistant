@@ -1,0 +1,19 @@
+# Override para habilitar GPU NVIDIA no worker Python.
+# Pré-requisito: nvidia-container-toolkit instalado e configurado no host.
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d python-worker
+#
+# Referência: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+
+services:
+  python-worker:
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
