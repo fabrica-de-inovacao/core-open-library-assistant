@@ -95,11 +95,26 @@ Gere as strings de busca booleana otimizadas:`,
   let queries: string[] = rawQueries;
 
   try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]) as { queries?: string[] };
-      if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
-        queries = parsed.queries;
+    const startIdx = text.indexOf('{');
+    if (startIdx !== -1) {
+      let depth = 0;
+      let jsonStr = '';
+      for (let i = startIdx; i < text.length; i++) {
+        if (text[i] === '{') depth++;
+        else if (text[i] === '}') {
+          depth--;
+          if (depth === 0) {
+            jsonStr = text.substring(startIdx, i + 1);
+            break;
+          }
+        }
+      }
+
+      if (jsonStr) {
+        const parsed = JSON.parse(jsonStr) as { queries?: string[] };
+        if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
+          queries = parsed.queries;
+        }
       }
     }
   } catch (err) {

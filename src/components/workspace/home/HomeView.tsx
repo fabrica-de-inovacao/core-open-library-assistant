@@ -141,7 +141,7 @@ export function HomeView({
             <span className="text-primary">como você pensa</span>
           </h1>
           <p className="text-muted-foreground mx-auto max-w-xl text-[15px] leading-relaxed">
-            Só descreva o que você quer pesquisar. A SOL encontra, lê e organiza a literatura
+            Só descreva o que você quer pesquisar. A C.O.R.E. encontra, lê e organiza a literatura
             científica ibero-americana mais relevante para você.
           </p>
         </div>

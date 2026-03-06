@@ -94,7 +94,7 @@ export const ExtractionsPanel = React.memo(
     const isProcessingComplete = articles.length > 0 && doneCount >= articles.length;
 
     return (
-      <div className="bg-background flex h-full flex-col">
+      <div className="bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/* Header */}
         <div className="border-border flex shrink-0 flex-col border-b">
           <div className="flex items-center justify-between gap-3 px-4 py-3">

@@ -14,13 +14,18 @@ import {
   Cpu,
   ThumbsUp,
   ThumbsDown,
+  Table,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { toast } from 'sonner';
 import { SearchProposalCard, GlobalSearchProposalCard, SearchJourneyCard } from './proposals';
 import { SimilarQueryBanner, type SimilarQueryInfo } from './SimilarQueryBanner';
 import type { ExecuteSearchFn, SearchAttempt } from './proposals';
+import { MermaidBlock, CodeBlock, AssetWrapper } from './AssetRenderers';
 
 // ---------------------------------------------------------------------------
 // TypingIndicator — ChatGPT style (sem bolha, avatar lateral)
@@ -32,7 +37,7 @@ export const TypingIndicator = () => (
     </div>
     <div className="flex flex-col gap-1 pt-0.5">
       <span className="text-muted-foreground text-[10px] font-bold tracking-widest uppercase select-none">
-        SOL Assistant
+        C.O.R.E. AI
       </span>
       <div className="flex items-center gap-1.5 py-1.5">
         {[0, 150, 300].map((delay) => (
@@ -204,16 +209,57 @@ export const ChatMessageItem = React.memo(
     const visibleText = textContent;
 
     const hasContent = textContent.trim().length > 0;
-    const toolParts = m.parts?.filter(isToolOrDynamicToolUIPart) ?? [];
+    type GenericToolInvocation = {
+      toolCallId: string;
+      toolName: string;
+      state?: string;
+      result?: unknown;
+      output?: unknown;
+      args?: unknown;
+      input?: unknown;
+    };
+
+    const msgParsed = m as unknown as { toolInvocations?: GenericToolInvocation[] };
+    const invocations = (msgParsed.toolInvocations ?? []).map((inv) => ({
+      type: 'tool-result', // pseudo part
+      toolCallId: inv.toolCallId,
+      toolName: inv.toolName,
+      state: 'output-available',
+      result: inv.result,
+      output: inv.output,
+      args: inv.args,
+      input: inv.input,
+    }));
+
+    const allParts = [...(m.parts ?? []), ...invocations];
+
+    const toolParts = allParts.filter(
+      (part) =>
+        isToolOrDynamicToolUIPart(part as any) ||
+        (part as unknown as { type?: string }).type === 'tool-result'
+    );
     const hasTools = toolParts.length > 0;
 
-    // Suprime o texto redundante ("Estratégia de busca pronta…") quando a mensagem
-    // já renderiza um SearchJourneyCard — o card é a UI canônica da proposta.
-    const hasProposalCall = toolParts.some((p) => {
-      const n = getToolOrDynamicToolName(p);
-      return n === 'propose_search_sol_database' || n === 'propose_search_global_database';
-    });
-    const shouldShowText = hasContent && !hasProposalCall;
+    const shouldShowText = hasContent;
+
+    // Detect if this message only contains proposal calls that have been superseded by a newer one in the journey
+    const isTotallyEmptyAndOutdated =
+      toolParts.length > 0 &&
+      !shouldShowText &&
+      toolParts.every((p) => {
+        const toolName =
+          getToolOrDynamicToolName(p as any) || (p as unknown as { toolName?: string }).toolName;
+        if (
+          toolName !== 'propose_search_sol_database' &&
+          toolName !== 'propose_search_global_database'
+        )
+          return false;
+        const toolCallId = (p as any).toolCallId || '';
+        if (searchJourney && searchJourney.length > 0) {
+          return searchJourney[searchJourney.length - 1].toolCallId !== toolCallId;
+        }
+        return false;
+      });
 
     const handleCopy = () => {
       navigator.clipboard.writeText(textContent);
@@ -224,6 +270,9 @@ export const ChatMessageItem = React.memo(
 
     const isUser = m.role === 'user';
     const userInitial = userName ? userName[0].toUpperCase() : 'U';
+
+    // Se a mensagem é vazia (outdated proposal), ou não tem conteúdo nenhum útil prosseguir, retorne null
+    if (isTotallyEmptyAndOutdated) return null;
     if (!isUser && !hasContent && !hasTools && !isStreaming) return null;
 
     // ----------------------------------------------------------------
@@ -257,7 +306,7 @@ export const ChatMessageItem = React.memo(
           {/* Nome + streaming dots */}
           <div className="mb-2 flex items-center gap-2">
             <span className="text-muted-foreground text-[10px] font-bold tracking-widest uppercase select-none">
-              SOL Assistant
+              C.O.R.E. AI
             </span>
             {isStreaming && (
               <span className="inline-flex gap-0.5">
@@ -292,7 +341,8 @@ export const ChatMessageItem = React.memo(
               {!isStreaming && (
                 <div className="prose prose-sm dark:prose-invert text-foreground max-w-none font-sans text-[14px] leading-relaxed">
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
                     components={{
                       // H1 — usado exclusivamente para o título "# 📚 TL;DR Geral" da revisão
                       h1({ children }) {
@@ -350,20 +400,66 @@ export const ChatMessageItem = React.memo(
                       },
                       code({ children, className }) {
                         const isBlock = !!className?.includes('language-');
-                        return isBlock ? (
-                          <code className={className}>{children}</code>
-                        ) : (
+                        if (isBlock) {
+                          const lang = className?.replace('language-', '') || '';
+                          const codeStr = String(children).replace(/\n$/, '');
+                          if (lang === 'mermaid') {
+                            return <MermaidBlock code={codeStr} />;
+                          }
+                          return <CodeBlock code={codeStr} language={lang} />;
+                        }
+                        return (
                           <code className="bg-muted text-foreground/90 rounded px-1 py-0.5 font-mono text-[12px]">
                             {children}
                           </code>
                         );
                       },
                       table({ children }) {
+                        const handleDownloadCsv = (e: React.MouseEvent) => {
+                          const tableNode = (e.currentTarget as HTMLElement)
+                            .closest('.asset-wrapper')
+                            ?.querySelector('table');
+                          if (!tableNode) return;
+
+                          const rows = Array.from(tableNode.querySelectorAll('tr'));
+                          const csv = rows
+                            .map((row) => {
+                              const cells = Array.from(row.querySelectorAll('th, td'));
+                              return cells
+                                .map((cell) => {
+                                  const text = cell.textContent || '';
+                                  return `"${text.replace(/"/g, '""')}"`;
+                                })
+                                .join(',');
+                            })
+                            .join('\n');
+
+                          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = url;
+                          link.download = `tabela-${Date.now()}.csv`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          URL.revokeObjectURL(url);
+                        };
+
                         return (
-                          <div className="border-border/50 my-4 w-full overflow-x-auto rounded-lg border">
-                            <table className="divide-border/50 min-w-full divide-y">
-                              {children}
-                            </table>
+                          <div className="asset-wrapper">
+                            <AssetWrapper
+                              title="Tabela de Dados"
+                              icon={<Table className="h-3.5 w-3.5" />}
+                              onDownload={handleDownloadCsv as any}
+                              downloadLabel="Baixar CSV"
+                              contentClassName="p-0"
+                            >
+                              <div className="w-full overflow-x-auto">
+                                <table className="divide-border/50 min-w-full divide-y">
+                                  {children}
+                                </table>
+                              </div>
+                            </AssetWrapper>
                           </div>
                         );
                       },
@@ -424,11 +520,34 @@ export const ChatMessageItem = React.memo(
           {toolParts.length > 0 && (
             <div className="mt-3 space-y-2.5">
               {toolParts.map((part) => {
-                const toolName = getToolOrDynamicToolName(part);
-                const toolCallId = part.toolCallId;
-                const state = part.state;
-                const output = (part as any).output as Record<string, any> | undefined;
-                const input = (part as any).input as Record<string, any> | undefined;
+                const toolName =
+                  getToolOrDynamicToolName(part as any) ||
+                  (part as unknown as { toolName?: string }).toolName ||
+                  '';
+                const toolCallId = (part as any).toolCallId || '';
+                const state = (part as any).state || '';
+                type ToolPart = {
+                  output?: Record<string, unknown>;
+                  result?: Record<string, unknown>;
+                  input?: Record<string, unknown>;
+                  args?: Record<string, unknown>;
+                  toolInvocation?: {
+                    result?: Record<string, unknown>;
+                    output?: Record<string, unknown>;
+                    args?: Record<string, unknown>;
+                    input?: Record<string, unknown>;
+                  };
+                };
+
+                const p = part as ToolPart;
+                const output = (p.output ||
+                  p.result ||
+                  p.toolInvocation?.result ||
+                  p.toolInvocation?.output) as Record<string, unknown> | undefined;
+                const input = (p.input ||
+                  p.args ||
+                  p.toolInvocation?.args ||
+                  p.toolInvocation?.input) as Record<string, unknown> | undefined;
 
                 // Proposal cards — SearchJourneyCard unificado (último) ou null (demais)
                 if (
@@ -456,10 +575,10 @@ export const ChatMessageItem = React.memo(
 
                   // Fallback sem journey — cards individuais (comportamento anterior)
                   if (toolName === 'propose_search_sol_database') {
-                    const queries: string[] | undefined = output?.queries ?? input?.queries;
-                    const queryId: string | undefined = output?.query_id ?? undefined;
+                    const queries = (output?.queries ?? input?.queries) as string[] | undefined;
+                    const queryId = (output?.query_id ?? undefined) as string | undefined;
                     if (!queries || queries.length === 0) return null;
-                    const similarQuery: SimilarQueryInfo | null = output?.similar_query ?? null;
+                    const similarQuery = (output?.similar_query ?? null) as SimilarQueryInfo | null;
                     return (
                       <>
                         {similarQuery && output?.similar_query_found && (
@@ -477,15 +596,14 @@ export const ChatMessageItem = React.memo(
                       </>
                     );
                   }
-                  const query: string | undefined = output?.query ?? input?.query;
-                  const queryId: string | undefined = output?.query_id ?? undefined;
+                  const query = (output?.query ?? input?.query) as string | undefined;
+                  const queryId = (output?.query_id ?? undefined) as string | undefined;
                   if (!query) return null;
                   return (
                     <GlobalSearchProposalCard
                       key={toolCallId}
                       query={query}
                       queryId={queryId}
-                      onExecute={onExecuteSearch}
                       onCancel={onCancelSearch}
                       isExecuted={queryId ? executedProposalIds?.has(queryId) : false}
                       isRunning={queryId ? (runningSearches?.has(queryId) ?? false) : false}

@@ -74,14 +74,14 @@ export function WorkspaceHeader({
   };
 
   const whatsappText = [
-    sessionTitle ? `📚 *${sessionTitle}*` : `📚 *Revisão sistemática gerada com SOL*`,
+    sessionTitle ? `📚 *${sessionTitle}*` : `📚 *Revisão sistemática gerada com C.O.R.E.*`,
     ``,
-    `Usei o SOL Assistant para fazer uma busca acadêmica automatizada e montar essa revisão — com artigos de bases como ACM, IEEE e Springer.`,
+    `Usei a C.O.R.E. AI para fazer uma busca acadêmica automatizada e montar essa revisão — com artigos de bases como ACM, IEEE e Springer.`,
     ``,
     `Veja o resultado completo aqui:`,
     shareUrl,
     ``,
-    `_SOL · Open Library Assistant — pesquisa acadêmica com IA_`,
+    `_C.O.R.E. AI — pesquisa acadêmica com IA_`,
   ].join('\n');
 
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(whatsappText)}`;

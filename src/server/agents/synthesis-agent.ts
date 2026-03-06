@@ -19,7 +19,7 @@
  */
 
 import { generateText } from 'ai';
-import { getModelForTask, getModelIdForTask } from '@/lib/ai-provider';
+import { getModelForTask } from '@/lib/ai-provider';
 import type { Article } from '@/lib/reranking';
 import { formatArticleReference } from '@/lib/mappers/article';
 import { logger } from '@/lib/logger';
@@ -127,14 +127,14 @@ function buildSystemPrompt(depth: SynthesisDepth, articleCount: number, userName
     ? `Encerre com um parágrafo curto SEM heading convidando **${userName}** a explorar algum aspecto específico ou a iniciar uma nova busca sobre um tema relacionado.`
     : 'Encerre com um parágrafo curto SEM heading convidando o usuário a explorar algum aspecto específico ou a iniciar uma nova busca sobre um tema relacionado.';
 
-  const base = `Você é um pesquisador especializado em revisão bibliográfica de literatura de Computação e Tecnologia.
+  const systemBase = `Você é a C.O.R.E. AI (Corpus Orchestration & Retrieval Engine), uma assistente acadêmica de elite especializada em ciência da computação. e Tecnologia.
 Responda OBRIGATORIAMENTE em Português do Brasil.
 Para TODA afirmação factual, insira a citação [N] imediatamente após, usando os números do mapa fornecido. Nunca invente outros números.
 NÃO inclua seção "Referências" — as citações [N] no corpo são suficientes.
 INSTRUÇÃO SOBRE ARTIGOS TANGENCIAIS: Se algum artigo do mapa for claramente periférico ao tema central, cite-o brevemente em uma única frase ou omita-o. Não force citações de artigos que não agregam ao argumento principal.`;
 
   if (depth === 'brief') {
-    return `${base}
+    return `${systemBase}
 
 Sua tarefa: produzir uma SÍNTESE CONCISA E DIRETA dos ${articleCount} artigos encontrados.
 
@@ -147,7 +147,7 @@ PROIBIDO: tabelas, subseções, listas de gaps, seções de metodologia. Apenas 
   }
 
   if (depth === 'standard') {
-    return `${base}
+    return `${systemBase}
 
 Sua tarefa: produzir uma SÍNTESE ESTRUTURADA de qualidade acadêmica para os ${articleCount} artigos encontrados.
 
@@ -168,7 +168,7 @@ PROIBIDO: seções de gaps, oportunidades de pesquisa, subseções ### por tema.
   }
 
   // depth === 'full'
-  return `${base}
+  return `${systemBase}
 
 Sua tarefa: produzir uma REVISÃO BIBLIOGRÁFICA COMPLETA e bem estruturada — com a qualidade de leitura de um relatório científico profissional.
 

@@ -356,8 +356,8 @@ export function useChatOrchestration({
       const ids = new Set<string>();
       for (const msg of initialMessages ?? []) {
         for (const part of (msg as { parts?: unknown[] }).parts ?? []) {
-          if (!isToolOrDynamicToolUIPart(part)) continue;
-          const name = getToolOrDynamicToolName(part);
+          if (!isToolOrDynamicToolUIPart(part as any)) continue;
+          const name = getToolOrDynamicToolName(part as any);
           if (name !== 'propose_search_sol_database' && name !== 'propose_search_global_database')
             continue;
           if ((part as { state?: string }).state !== 'output-available') continue;
@@ -536,8 +536,64 @@ export function useChatOrchestration({
         result.push(m);
         continue;
       }
-      // Mensagem com tool calls → sempre exibir
-      if ((m.parts?.filter(isToolOrDynamicToolUIPart) ?? []).length > 0) {
+      // Mensagem com tool calls → pode precisar de merge
+      const mTools = m.parts?.filter(isToolOrDynamicToolUIPart) ?? [];
+      if (mTools.length > 0) {
+        const hasProposal = mTools.some((p) => {
+          const n = getToolOrDynamicToolName(p);
+          return n === 'propose_search_sol_database' || n === 'propose_search_global_database';
+        });
+
+        if (hasProposal) {
+          const lastShown = result.at(-1);
+          if (lastShown && lastShown.role === 'assistant') {
+            const lastHasProposal = (lastShown.parts?.filter(isToolOrDynamicToolUIPart) ?? []).some(
+              (p) => {
+                const n = getToolOrDynamicToolName(p);
+                return (
+                  n === 'propose_search_sol_database' || n === 'propose_search_global_database'
+                );
+              }
+            );
+
+            if (lastHasProposal) {
+              // Merge m into lastShown
+              const mergedParts = [...(lastShown.parts || [])];
+              for (const part of m.parts || []) {
+                if (part.type === 'text') {
+                  const lastTextIdx = mergedParts.findIndex((p) => p.type === 'text');
+                  if (lastTextIdx >= 0) {
+                    const existing = mergedParts[lastTextIdx] as any;
+                    const newText = existing.text.trim()
+                      ? existing.text + '\n\n' + part.text
+                      : part.text;
+                    mergedParts[lastTextIdx] = { ...existing, text: newText };
+                  } else {
+                    mergedParts.push(part);
+                  }
+                } else {
+                  mergedParts.push(part);
+                }
+              }
+
+              const msgParsed = m as any;
+              const lastParsed = lastShown as any;
+              const mergedInvocations = [
+                ...(lastParsed.toolInvocations || []),
+                ...(msgParsed.toolInvocations || []),
+              ];
+
+              result[result.length - 1] = {
+                ...lastShown,
+                parts: mergedParts,
+                toolInvocations: mergedInvocations.length > 0 ? mergedInvocations : undefined,
+              } as UIMessage;
+
+              continue;
+            }
+          }
+        }
+
         result.push(m);
         continue;
       }
@@ -628,14 +684,38 @@ export function useChatOrchestration({
   }, [messages]);
 
   const reviewRankedIds = useMemo<string[] | null>(() => {
-    for (const msg of messages) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      // 1. Tenta parts
       for (const part of msg.parts ?? []) {
         if (!isToolOrDynamicToolUIPart(part)) continue;
         if (getToolOrDynamicToolName(part) !== 'generate_systematic_review') continue;
-        const ids = (part as any).output?.ranked_article_ids;
-        if (Array.isArray(ids) && ids.length > 0) return ids as string[];
+        const ids =
+          (part as any).output?.ranked_article_ids ||
+          (part as any).result?.ranked_article_ids ||
+          (part as any).toolInvocation?.result?.ranked_article_ids ||
+          (part as any).toolInvocation?.output?.ranked_article_ids;
+        if (Array.isArray(ids) && ids.length > 0) {
+          return ids as string[];
+        }
+      }
+
+      // 2. Fallback para toolInvocations (formato unificado do AI SDK >= 3.1)
+      const msgObj = msg as unknown as {
+        toolInvocations?: Array<{ toolName: string; result?: any; output?: any; args?: any }>;
+      };
+      for (const inv of msgObj.toolInvocations ?? []) {
+        if (inv.toolName !== 'generate_systematic_review') continue;
+        const ids =
+          inv.result?.ranked_article_ids ||
+          inv.output?.ranked_article_ids ||
+          inv.args?.ranked_article_ids;
+        if (Array.isArray(ids) && ids.length > 0) {
+          return ids as string[];
+        }
       }
     }
+    console.log('[DEBUG-RERUN] Nenhum ranked_article_ids encontrado nas mensagens.');
     return null;
   }, [messages]);
 
@@ -650,12 +730,21 @@ export function useChatOrchestration({
 
     // Após síntese: usa a ordem exata do reranker semântico (backend) — P-ranking-sync
     if (reviewRankedIds?.length) {
+      console.log('[DEBUG-RERUN] Sorting using reviewRankedIds:', reviewRankedIds);
       const posMap = new Map(reviewRankedIds.map((id, i) => [id, i]));
-      return [...arr].sort(
+      const sorted = [...arr].sort(
         (a, b) => (posMap.get(a.id) ?? Infinity) - (posMap.get(b.id) ?? Infinity)
       );
+      if (sorted.length > 0) {
+        console.log(
+          '[DEBUG-RERUN] First 3 sorted article IDs:',
+          sorted.slice(0, 3).map((a) => a.id)
+        );
+      }
+      return sorted;
     }
 
+    console.log('[DEBUG-RERUN] No reviewRankedIds, fallback to standard rankArticles.');
     // Antes da síntese: ranking bibliométrico via lib/reranking.ts (DRY — sem fórmula duplicada).
     // Artigos em processamento (não-terminais) ficam ao final da lista.
     const TERMINAL = ['done', 'abstract_only'];

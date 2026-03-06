@@ -58,7 +58,7 @@ export function AppSidebar() {
             </Link>
             <div className="flex min-w-0 flex-1 flex-col leading-none group-data-[collapsible=icon]:hidden">
               <span className="text-sidebar-foreground truncate text-[13px] font-semibold tracking-tight">
-                SOL O.L.A
+                C.O.R.E. AI
               </span>
               <span className="text-sidebar-foreground/35 font-mono text-[8px] tracking-[0.15em] uppercase">
                 SCBC · 2026

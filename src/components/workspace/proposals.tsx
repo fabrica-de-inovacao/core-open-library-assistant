@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
-import { Loader2, Terminal, Check, ChevronDown, ChevronUp, Globe, Activity, X } from 'lucide-react';
+import { Loader2, Terminal, Check, ChevronDown, ChevronUp, Activity, X } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Shared type
@@ -16,8 +16,8 @@ export interface SearchAttempt {
   type: 'sol' | 'global';
   toolCallId: string;
   queryId?: string;
-  queries?: string[];  // SOL (múltiplas strings)
-  query?: string;      // Global (única string)
+  queries?: string[]; // C.O.R.E. (múltiplas strings)
+  query?: string; // Global (única string)
   isExecuted: boolean;
   isRunning: boolean;
 }
@@ -43,24 +43,22 @@ export const SearchJourneyCard = ({ attempts, onCancel }: SearchJourneyCardProps
   const isPending = !isExecuted && !isRunning;
   const isGlobal = current.type === 'global';
 
-  const typeLabel = (type: 'sol' | 'global') => (type === 'sol' ? 'SOL' : 'OpenAlex');
+  const typeLabel = (type: 'sol' | 'global') => (type === 'sol' ? 'C.O.R.E.' : 'OpenAlex');
   const typeEmoji = (type: 'sol' | 'global') => (type === 'sol' ? '🔍' : '🌐');
 
   const currentQueryStr =
-    current.type === 'sol'
-      ? (current.queries ?? []).join(' | ')
-      : (current.query ?? '');
+    current.type === 'sol' ? (current.queries ?? []).join(' | ') : (current.query ?? '');
 
   return (
     <div
-      className={`border-border bg-card mt-3 overflow-hidden rounded-xl border shadow-sm${isGlobal ? ' border-amber-200/60 dark:border-amber-800/40' : ''}`}
+      className={`border-border bg-card mt-3 overflow-hidden rounded-xl border shadow-sm${isGlobal ? 'border-amber-200/60 dark:border-amber-800/40' : ''}`}
     >
       {/* ── Header ── */}
       <div
-        className={`border-border/60 flex items-center justify-between border-b px-4 py-2.5${isGlobal ? ' bg-amber-50/60 dark:bg-amber-950/20' : ' bg-muted/30'}`}
+        className={`border-border/60 flex items-center justify-between border-b px-4 py-2.5${isGlobal ? 'bg-amber-50/60 dark:bg-amber-950/20' : 'bg-muted/30'}`}
       >
         <div className="flex items-center gap-2">
-          <span className="select-none text-sm">🔬</span>
+          <span className="text-sm select-none">🔬</span>
           <span className="text-[11px] font-bold tracking-tight uppercase">
             Estratégia de Busca
           </span>
@@ -111,7 +109,7 @@ export const SearchJourneyCard = ({ attempts, onCancel }: SearchJourneyCardProps
             onKeyDown={(e) =>
               e.key === 'Enter' || e.key === ' ' ? setHistoryOpen(!historyOpen) : undefined
             }
-            className="border-border/40 text-muted-foreground hover:bg-muted/30 hover:text-foreground flex w-full cursor-pointer select-none items-center gap-2 border-b px-4 py-1.5 text-[10px] font-medium transition-colors"
+            className="border-border/40 text-muted-foreground hover:bg-muted/30 hover:text-foreground flex w-full cursor-pointer items-center gap-2 border-b px-4 py-1.5 text-[10px] font-medium transition-colors select-none"
           >
             {historyOpen ? (
               <ChevronUp className="h-3 w-3 opacity-50" />
@@ -126,12 +124,11 @@ export const SearchJourneyCard = ({ attempts, onCancel }: SearchJourneyCardProps
           {historyOpen && (
             <div className="animate-in slide-in-from-top-1 bg-muted/5 border-border/40 space-y-2 border-b px-4 py-2.5 duration-150">
               {pastAttempts.map((a) => {
-                const q =
-                  a.type === 'sol' ? (a.queries ?? []).join(' | ') : (a.query ?? '');
+                const q = a.type === 'sol' ? (a.queries ?? []).join(' | ') : (a.query ?? '');
                 const qs = q.length > 72 ? q.slice(0, 72) + '…' : q;
                 return (
                   <div key={a.toolCallId} className="flex items-start gap-2">
-                    <span className="mt-0.5 shrink-0 select-none text-[11px]">
+                    <span className="mt-0.5 shrink-0 text-[11px] select-none">
                       {typeEmoji(a.type)}
                     </span>
                     <div className="min-w-0 flex-1">
@@ -140,7 +137,9 @@ export const SearchJourneyCard = ({ attempts, onCancel }: SearchJourneyCardProps
                       </span>
                       <span className="text-muted-foreground/40 mx-1 text-[10px]">—</span>
                       <span className="text-muted-foreground/60 font-mono text-[10px]">{qs}</span>
-                      <span className="ml-1.5 text-[10px] text-orange-400/80">↳ sem resultados</span>
+                      <span className="ml-1.5 text-[10px] text-orange-400/80">
+                        ↳ sem resultados
+                      </span>
                     </div>
                   </div>
                 );
@@ -153,8 +152,8 @@ export const SearchJourneyCard = ({ attempts, onCancel }: SearchJourneyCardProps
       {/* ── Query atual ── */}
       <div className="bg-muted/10 space-y-1.5 px-4 py-3">
         <div className="flex items-center gap-1.5">
-          <span className="select-none text-[11px]">{typeEmoji(current.type)}</span>
-          <span className="text-muted-foreground text-[10px] font-bold uppercase tracking-wider">
+          <span className="text-[11px] select-none">{typeEmoji(current.type)}</span>
+          <span className="text-muted-foreground text-[10px] font-bold tracking-wider uppercase">
             {typeLabel(current.type)}
             {current.type === 'sol' ? ' — strings da busca:' : ' — query:'}
           </span>
@@ -164,14 +163,14 @@ export const SearchJourneyCard = ({ attempts, onCancel }: SearchJourneyCardProps
             {(current.queries ?? []).map((q, i) => (
               <div
                 key={i}
-                className="bg-background overflow-x-auto rounded-md border border-border/40 px-2.5 py-1.5 font-mono text-[11px] text-foreground/75"
+                className="bg-background border-border/40 text-foreground/75 overflow-x-auto rounded-md border px-2.5 py-1.5 font-mono text-[11px]"
               >
                 {q}
               </div>
             ))}
           </div>
         ) : (
-          <div className="bg-background overflow-x-auto rounded-md border border-border/40 px-2.5 py-1.5 font-mono text-[11px] text-foreground/75">
+          <div className="bg-background border-border/40 text-foreground/75 overflow-x-auto rounded-md border px-2.5 py-1.5 font-mono text-[11px]">
             {currentQueryStr}
           </div>
         )}
@@ -186,7 +185,7 @@ export const SearchJourneyCard = ({ attempts, onCancel }: SearchJourneyCardProps
 };
 
 // ---------------------------------------------------------------------------
-// SearchProposalCard — busca SOL
+// SearchProposalCard — busca C.O.R.E.
 // ---------------------------------------------------------------------------
 interface SearchProposalCardProps {
   queries: string[];
@@ -200,7 +199,6 @@ interface SearchProposalCardProps {
 export const SearchProposalCard = ({
   queries,
   queryId,
-  onExecute,
   onCancel,
   isExecuted,
   isRunning,
@@ -223,7 +221,7 @@ export const SearchProposalCard = ({
         <div className="flex items-center gap-2">
           <Terminal className="text-primary h-3.5 w-3.5" />
           <span className="text-[11px] font-bold tracking-tight uppercase">
-            Estratégia de Busca SOL ({editableQueries.length} string
+            Estratégia de Busca C.O.R.E. ({editableQueries.length} string
             {editableQueries.length !== 1 ? 's' : ''})
           </span>
         </div>
@@ -291,7 +289,6 @@ export const SearchProposalCard = ({
 interface GlobalSearchProposalCardProps {
   query: string;
   queryId?: string;
-  onExecute?: ExecuteSearchFn;
   onCancel?: (queryId: string) => void;
   isExecuted?: boolean;
   isRunning?: boolean;
@@ -300,7 +297,6 @@ interface GlobalSearchProposalCardProps {
 export const GlobalSearchProposalCard = ({
   query,
   queryId,
-  onExecute,
   onCancel,
   isExecuted,
   isRunning,

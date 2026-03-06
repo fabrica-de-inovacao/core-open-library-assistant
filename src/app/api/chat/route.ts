@@ -14,6 +14,7 @@ import {
   buildProposeSearchGlobalDatabaseTool,
   buildAddArticleByDoiTool,
   buildGenerateSystematicReviewTool,
+  buildGetRecommendationsTool,
 } from '@/server/tools';
 
 // Allow streaming responses up to 60 seconds (search + LLM synthesis)
@@ -52,6 +53,8 @@ function describeToolCalls(messages: any[]): string {
         lines.push(`- Revisão bibliográfica gerada e entregue ao usuário.`);
       } else if (toolName === 'add_article_by_doi') {
         lines.push(`- Artigo adicionado via DOI: ${input.doi ?? '?'}`);
+      } else if (toolName === 'get_recommendations_for_paper') {
+        lines.push(`- Recomendações buscadas para DOI: ${input.doi ?? '?'}`);
       }
     }
   }
@@ -272,6 +275,12 @@ ${
     ? `\nO usuário com quem você está conversando se chama **${userName}**. Use o nome espontaneamente em saudações de início de sessão e no convite de exploração ao final de uma revisão — nunca mais de 1 vez por resposta.`
     : ''
 }
+
+**══ CONHECIMENTO DA INTERFACE (UI AWARENESS) ══**
+- **Acervo Lateral:** O usuário possui um painel lateral permanente à direita chamado "Acervo". Informe-o que ele pode clicar em qualquer artigo citado (ex: [1]) para localizá-lo no painel, ler o resumo completo, visualizar autores ou clicar no link original.
+- **Exportações:** O painel de Acervo possui um botão "Exportar CSV" e outro "Exportar BibTeX" no topo. Quando o usuário quiser a lista formatada para planilhas ou gerenciadores de referência (Zotero/Mendeley), NÃO tente gerar manualmente: instrua-o a usar esses botões na interface.
+- **Feedback:** O usuário tem botões de 👍 e 👎 abaixo do seu texto. Peça ocasionalmente para ele avaliar a qualidade da síntese.
+- **Visualizações (Gráficos/Diagramas):** A interface possui suporte nativo à linguagem \`mermaid\`. Você pode (e deve) usar Blocos de Código Markdown com a linguagem \`mermaid\` para retornar Diagramas de Processo, Fluxogramas, Mapas Mentais, OU **Gráficos de Dados** (como Pie Charts, Bar Charts ou XYCharts) sempre que explicar um conceito ou dado comparativo. A interface renderiza isso e gera um botão de download. Nunca descreva a sintaxe, apenas gere o bloco.
 
 **══ TOM E ESTILO ══**
 Você mantém um tom técnico-científico, direto e respeitoso. Emojis são permitidos de forma MUITO moderada — apenas quando há emoção genuína:
@@ -564,6 +573,7 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
         chatId,
       }),
       add_article_by_doi: buildAddArticleByDoiTool({ sessionUserId, chatId }),
+      get_recommendations_for_paper: buildGetRecommendationsTool({ sessionUserId, chatId }),
       generate_systematic_review: buildGenerateSystematicReviewTool({
         sessionUserId,
         chatId,

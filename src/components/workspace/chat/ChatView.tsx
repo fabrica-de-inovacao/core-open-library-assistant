@@ -207,7 +207,8 @@ export function ChatView({
         if (
           toolName !== 'propose_search_sol_database' &&
           toolName !== 'propose_search_global_database'
-        ) continue;
+        )
+          continue;
         const { state } = part;
         if (!['output-available', 'input-available', 'input-streaming'].includes(state)) continue;
         const output = (part as any).output as Record<string, any> | undefined;
@@ -245,9 +246,13 @@ export function ChatView({
 
   // ── Navegação no histórico de queries ────────────────────────────────────
   const handleSelectQuery = useCallback((queryId: string) => {
-    document
-      .querySelector(`[data-query-id="${queryId}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const el = document.querySelector(`[data-query-id="${queryId}"]`) as HTMLElement;
+    if (el && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({
+        top: el.offsetTop - 24,
+        behavior: 'smooth',
+      });
+    }
   }, []);
 
   // =========================================================================
@@ -259,11 +264,12 @@ export function ChatView({
         {/* ── Painel principal ── */}
         <ResizablePanel
           panelRef={mainPanelRef}
-          defaultSize="100"
-          minSize="30"
+          defaultSize={100}
+          minSize={30}
+          className="flex min-h-0 min-w-0 flex-col overflow-hidden border-[3px] border-red-600"
           style={{ transition: 'flex 380ms cubic-bezier(0.16, 1, 0.3, 1)' }}
         >
-          <div className="relative flex h-full flex-col">
+          <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-[3px] border-blue-600">
             {/* Histórico de queries */}
             {queryGroups.length > 0 && (
               <QueryHistoryBar
@@ -274,8 +280,11 @@ export function ChatView({
             )}
 
             {/* Lista de mensagens */}
-            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto py-6">
-              <div className="mx-auto max-w-3xl space-y-4 px-4">
+            <div
+              ref={scrollContainerRef}
+              className="flex-1 overflow-x-hidden overflow-y-auto border-[3px] border-green-600 py-6"
+            >
+              <div className="mx-auto max-w-4xl space-y-4 border-[3px] border-yellow-600 px-4">
                 {displayMessages.map((msg) => (
                   <ChatMessageItem
                     key={msg.id}
@@ -324,22 +333,24 @@ export function ChatView({
             />
 
             {/* Barra de input */}
-            <ChatInputBar
-              input={input}
-              onInputChange={handleInputChange}
-              onSubmit={handleSubmit}
-              showAbortButton={isLoading}
-              onAbort={stop}
-              suggestionChips={chipsList}
-              onSuggestionClick={handleSuggestionClick}
-              attachments={attachments}
-              searchLimit={searchLimit}
-              onSearchLimitChange={onSearchLimitChange}
-              modelId={modelId}
-              onModelChange={onModelChange}
-              synthesisMode={synthesisMode}
-              onSynthesisModeChange={setSynthesisMode}
-            />
+            <div className="border-[3px] border-purple-600">
+              <ChatInputBar
+                input={input}
+                onInputChange={handleInputChange}
+                onSubmit={handleSubmit}
+                showAbortButton={isLoading}
+                onAbort={stop}
+                suggestionChips={chipsList}
+                onSuggestionClick={handleSuggestionClick}
+                attachments={attachments}
+                searchLimit={searchLimit}
+                onSearchLimitChange={onSearchLimitChange}
+                modelId={modelId}
+                onModelChange={onModelChange}
+                synthesisMode={synthesisMode}
+                onSynthesisModeChange={setSynthesisMode}
+              />
+            </div>
           </div>
         </ResizablePanel>
 
@@ -354,6 +365,7 @@ export function ChatView({
               maxSize="65"
               collapsible
               collapsedSize="0"
+              className="flex min-h-0 min-w-0 flex-col overflow-hidden"
               style={{ transition: 'flex 380ms cubic-bezier(0.16, 1, 0.3, 1)' }}
               onResize={(size) => setIsPanelOpen(size.asPercentage > 1)}
             >

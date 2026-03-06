@@ -92,9 +92,9 @@ function WorkspaceShell({ initialMessages }: { initialMessages?: UIMessage[] }) 
    */
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
-    const pending = sessionStorage.getItem('sol-pending-query');
+    const pending = sessionStorage.getItem('core-pending-query');
     if (!pending) return;
-    sessionStorage.removeItem('sol-pending-query');
+    sessionStorage.removeItem('core-pending-query');
     orchestration.sendMessage({ text: pending });
     attachments.clearChips();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,7 +107,7 @@ function WorkspaceShell({ initialMessages }: { initialMessages?: UIMessage[] }) 
    * e tenta agir. Guarda o texto pendente no sessionStorage e abre o modal.
    */
   const handleShowLoginModal = (pendingText?: string) => {
-    if (pendingText) sessionStorage.setItem('sol-pending-query', pendingText);
+    if (pendingText) sessionStorage.setItem('core-pending-query', pendingText);
     setLoginModalOpen(true);
   };
 

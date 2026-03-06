@@ -202,7 +202,7 @@ export function ChatInputBar({
 
         {/* Disclaimer */}
         <p className="text-muted-foreground/40 mt-2 text-center text-[10px]">
-          SOL pode cometer erros. Verifique as fontes no acervo.
+          C.O.R.E. AI pode cometer erros. Verifique as fontes no acervo.
         </p>
       </form>
     </div>

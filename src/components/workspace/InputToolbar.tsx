@@ -146,7 +146,7 @@ export function InputToolbar({
           <Globe className="text-muted-foreground/40 h-3 w-3 shrink-0 cursor-default" />
         </TooltipTrigger>
         <TooltipContent side="top" sideOffset={8} className="text-xs">
-          Cobertura: SOL · ACM · IEEE · Springer
+          Cobertura: C.O.R.E. · ACM · IEEE · Springer
         </TooltipContent>
       </Tooltip>
 
