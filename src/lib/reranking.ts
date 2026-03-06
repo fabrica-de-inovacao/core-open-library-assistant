@@ -1,16 +1,15 @@
 /**
  * @file reranking.ts
- * @description Reranking semântico para artigos científicos.
+ * @description Reranking semântico para artigos científicos de Computação e Tecnologia.
  *
- * Implementa o score composto descrito no documento científico v2.0:
+ * Implementa o score composto:
  *
  *   S(a) = α·Sem(a) + β·Imp(a) + γ·Rec(a)
  *
- * Fase 1 (sem embeddings): α=0.0, β=0.6, γ=0.4
- *   — Usa citações e recência. Sem vetores semânticos.
- *
- * Fase 2 (com embeddings): α=0.5, β=0.3, γ=0.2  [futura — requer migração]
- *   — Adiciona similaridade de cosseno entre abstrato e query do usuário.
+ * Fase 2 (ativa): α=0.5, β=0.3, γ=0.2
+ *   — Usa similaridade de cosseno entre o embedding do abstract e o da query do usuário,
+ *     combinada com citações acadêmicas e recência.
+ *   — Artigos sem embedding no banco degradam graciosamente para β·Imp + γ·Rec.
  */
 
 import type { InferSelectModel } from 'drizzle-orm';
@@ -19,11 +18,11 @@ import type { articles } from '@/server/db/schema';
 export type Article = InferSelectModel<typeof articles>;
 
 // ---------------------------------------------------------------------------
-// Configuração de pesos — Fase 1 (sem embeddings semânticos)
+// Configuração de pesos — Fase 2 (com embeddings semânticos ativos)
 // ---------------------------------------------------------------------------
-const ALPHA = 0.0; // peso semântico  (embedding — Fase 2)
-const BETA = 0.6; // peso de impacto (citações acadêmicas)
-const GAMMA = 0.4; // peso de recência (ano de publicação)
+const ALPHA = 0.5; // peso semântico  (cosine similarity query ↔ abstract)
+const BETA = 0.3; // peso de impacto (citações acadêmicas)
+const GAMMA = 0.2; // peso de recência (ano de publicação)
 
 const CURRENT_YEAR = new Date().getFullYear();
 

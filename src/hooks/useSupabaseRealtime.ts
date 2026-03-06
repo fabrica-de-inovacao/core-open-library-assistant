@@ -27,6 +27,7 @@ const ARTICLE_COLUMNS = [
   'publisher',
   'is_open_access',
   'metadata_source',
+  'citation_graph',
   'created_at',
   'updated_at',
 ].join(',');
@@ -53,6 +54,8 @@ const mapArticle = (raw: any): Article => ({
   metadataSource: (raw.metadata_source as string | null) ?? null,
   // P-09: abstract_embedding excluido do SELECT - nunca enviado via WebSocket
   abstractEmbedding: null,
+  // Fase 6 (P-seguinte): grafo de citações (JSONB — enviado como objeto pelo Supabase)
+  citationGraph: (raw.citation_graph as Article['citationGraph']) ?? null,
   createdAt: raw.created_at ? new Date(raw.created_at as string) : new Date(),
   updatedAt: raw.updated_at ? new Date(raw.updated_at as string) : new Date(),
 });
@@ -78,7 +81,17 @@ export function useSupabaseRealtime(activeQueryId: string | null, chatId?: strin
 
   // Status da query ativa — subscrito via Realtime para disparar síntese/refinamento
   // somente quando o Inngest confirmar que TODOS os batches foram concluídos.
-  const [queryStatus, setQueryStatus] = useState<string | null>(null);
+  //
+  // IMPORTANTE: armazenamos { id, status } em vez de apenas string para evitar
+  // race condition entre buscas na mesma sessão:
+  //   Render N:   activeQueryId='A', queryStatus='done' (busca 1 concluída)
+  //   Render N+1: activeQueryId='B' (nova busca), queryStatus ainda é 'done' (stale)
+  //   → effect de síntese dispararia prematuramente para 'B' com status stale de 'A'
+  // Ao derivar queryStatus=null quando id≠activeQueryId no return, eliminamos o
+  // problema SEM depender de timing de efeitos ou re-renders extras.
+  const [queryStatusEntry, setQueryStatusEntry] = useState<{ id: string; status: string } | null>(
+    null
+  );
 
   // Handler reutilizável entre a subscrição principal e as extras
   const handlePayload = useCallback(
@@ -270,7 +283,7 @@ export function useSupabaseRealtime(activeQueryId: string | null, chatId?: strin
   // Inngest marca searchQueries.status = 'done' (todos os batches concluídos).
   useEffect(() => {
     if (!activeQueryId) {
-      setQueryStatus(null);
+      setQueryStatusEntry(null);
       return;
     }
 
@@ -282,7 +295,7 @@ export function useSupabaseRealtime(activeQueryId: string | null, chatId?: strin
       .single()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .then(({ data: q }: { data: any }) => {
-        if (q?.status) setQueryStatus(q.status as string);
+        if (q?.status) setQueryStatusEntry({ id: activeQueryId, status: q.status as string });
       });
 
     const channel = supabase
@@ -300,7 +313,7 @@ export function useSupabaseRealtime(activeQueryId: string | null, chatId?: strin
           const newStatus = payload.new?.status as string | undefined;
           if (newStatus) {
             logger.log(`[useSupabaseRealtime] Query status → ${newStatus}`);
-            setQueryStatus(newStatus);
+            setQueryStatusEntry({ id: activeQueryId, status: newStatus });
           }
         }
       )
@@ -316,9 +329,12 @@ export function useSupabaseRealtime(activeQueryId: string | null, chatId?: strin
   // não atingiu um estado terminal. O Realtime (acima) continua ativo e, se funcionar,
   // atualiza o estado mais rápido — o polling só age se o Realtime silenciar.
   const TERMINAL_STATUSES = new Set(['done', 'needs_refinement', 'failed', 'cancelled']);
+  // Deriva o status efetivo para este activeQueryId (null se entry.id !== activeQueryId)
+  const effectiveQueryStatus =
+    queryStatusEntry?.id === activeQueryId ? queryStatusEntry.status : null;
   useEffect(() => {
     if (!activeQueryId) return;
-    if (queryStatus && TERMINAL_STATUSES.has(queryStatus)) return; // já terminal
+    if (effectiveQueryStatus && TERMINAL_STATUSES.has(effectiveQueryStatus)) return; // já terminal
 
     let consecutiveNulls = 0;
     let intervalId: ReturnType<typeof setInterval> | null = null;
@@ -351,9 +367,9 @@ export function useSupabaseRealtime(activeQueryId: string | null, chatId?: strin
       consecutiveNulls = 0;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const newStatus = (q as any)?.status as string | undefined;
-      if (newStatus && newStatus !== queryStatus) {
+      if (newStatus && newStatus !== effectiveQueryStatus) {
         logger.log(`[useSupabaseRealtime] Poll: query status → ${newStatus}`);
-        setQueryStatus(newStatus);
+        setQueryStatusEntry({ id: activeQueryId, status: newStatus });
       }
     };
 
@@ -362,7 +378,9 @@ export function useSupabaseRealtime(activeQueryId: string | null, chatId?: strin
       if (intervalId) clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeQueryId, queryStatus]);
+  }, [activeQueryId, effectiveQueryStatus]);
 
-  return { data, realtimeStatus, addQueryId, refreshByChatId, queryStatus };
+  // effectiveQueryStatus é null quando queryStatusEntry.id ≠ activeQueryId —
+  // isso garante que buscas anteriores não contaminem o estado da busca atual.
+  return { data, realtimeStatus, addQueryId, refreshByChatId, queryStatus: effectiveQueryStatus };
 }

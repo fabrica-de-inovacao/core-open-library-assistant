@@ -21,6 +21,10 @@ export interface Article {
   isOpenAccess?: boolean | null;
   // Fase 3 (P-PDF): identifica documentos enviados pelo próprio usuário
   metadataSource?: string | null;
+  // Fase 6 (P-seguinte): grafo de citações via Semantic Scholar
+  // Tipado como unknown para compatibilidade com o jsonb inferência do Drizzle;
+  // cast para CitationGraphData é feito no ArticleCard.
+  citationGraph?: unknown | null;
 }
 
 export interface ArticleCardProps {

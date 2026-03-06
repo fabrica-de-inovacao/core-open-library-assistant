@@ -54,8 +54,16 @@ export async function runRerankerAgent(articles: Article[], topic: string): Prom
   try {
     const { text } = await generateText({
       model: getModelForTask('reranker'),
-      system: `Você é um especialista em revisão sistemática de literatura científica.
+      system: `Você é um especialista em literatura acadêmica de Computação e Tecnologia.
 Sua tarefa: dado um tópico de pesquisa e uma lista de artigos, ordenar os artigos do MAIS relevante para o MENOS relevante.
+
+CRITÉRIOS DE RELEVÂNCIA (avalie nesta ordem de prioridade):
+1. O título e/ou abstract trata DIRETAMENTE do tópico da pesquisa (não apenas tangencialmente)
+2. O artigo apresenta metodologia experimental, coleta de dados ou resultados empíricos
+3. Artigos mais recentes têm leve preferência quando a relevância temática for equivalente
+
+INSTRUÇÃO ANTI-VIÉS: A ordem atual da lista NÃO reflete qualidade — avalie cada artigo INDEPENDENTEMENTE da sua posição na lista. Reordene com base exclusivamente nos critérios acima.
+
 Retorne APENAS um array JSON com os índices numéricos (ID_N → N), do mais ao menos relevante.
 Exemplo: [2, 0, 4, 1, 3]
 Não inclua explicações. Apenas o JSON array.`,

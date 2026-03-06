@@ -1,6 +1,6 @@
 /**
  * @file synthesis-agent.ts
- * @description Agente especializado em síntese de revisão sistemática de literatura.
+ * @description Agente especializado em síntese de revisão bibliográfica de literatura de Computação e Tecnologia.
  *
  * Responsabilidade única: receber artigos rankeados e produzir um relatório
  * estruturado em Markdown, com citações numeradas.
@@ -47,7 +47,8 @@ export interface SynthesisResult {
 export async function runSynthesisAgent(
   articles: Article[],
   queryId: string,
-  depth: SynthesisDepth = 'full'
+  depth: SynthesisDepth = 'full',
+  userName?: string
 ): Promise<SynthesisResult> {
   // Fase C (IA-04): caps ajustados por profundidade de síntese.
   // brief: 8→5 (eram ignorados pela LLM — 2-3 parágrafos não absorvem 8 artigos)
@@ -83,7 +84,7 @@ export async function runSynthesisAgent(
 
   // ─── Prompts calibrados por profundidade ──────────────────────────────────
 
-  const systemPrompt = buildSystemPrompt(depth, topK.length);
+  const systemPrompt = buildSystemPrompt(depth, topK.length, userName);
 
   const { text } = await generateText({
     model: getModelForTask('synthesis'),
@@ -120,11 +121,17 @@ ${articlesContext}`,
 
 // ─── Builders de system prompt por profundidade ───────────────────────────────
 
-function buildSystemPrompt(depth: SynthesisDepth, articleCount: number): string {
-  const base = `Você é um pesquisador sênior especializado em revisão sistemática de literatura científica.
+function buildSystemPrompt(depth: SynthesisDepth, articleCount: number, userName?: string): string {
+  // Parágrafo de fechamento personalizado (1.1.2 + 3.2)
+  const closingInstruction = userName
+    ? `Encerre com um parágrafo curto SEM heading convidando **${userName}** a explorar algum aspecto específico ou a iniciar uma nova busca sobre um tema relacionado.`
+    : 'Encerre com um parágrafo curto SEM heading convidando o usuário a explorar algum aspecto específico ou a iniciar uma nova busca sobre um tema relacionado.';
+
+  const base = `Você é um pesquisador especializado em revisão bibliográfica de literatura de Computação e Tecnologia.
 Responda OBRIGATORIAMENTE em Português do Brasil.
 Para TODA afirmação factual, insira a citação [N] imediatamente após, usando os números do mapa fornecido. Nunca invente outros números.
-NÃO inclua seção "Referências" — as citações [N] no corpo são suficientes.`;
+NÃO inclua seção "Referências" — as citações [N] no corpo são suficientes.
+INSTRUÇÃO SOBRE ARTIGOS TANGENCIAIS: Se algum artigo do mapa for claramente periférico ao tema central, cite-o brevemente em uma única frase ou omita-o. Não force citações de artigos que não agregam ao argumento principal.`;
 
   if (depth === 'brief') {
     return `${base}
@@ -155,7 +162,7 @@ ESTRUTURA OBRIGATÓRIA NESTA ORDEM EXATA:
 (tabela Markdown com colunas: Artigo | Ano | Metodologia | Resultado Principal
 Use alinhamento: :--- para texto, :---: para ano)
 
-Encerre com um parágrafo curto SEM heading convidando o usuário a explorar algum aspecto específico em mais detalhe, ou a ampliar o corpus com mais artigos se necessário — sem transmitir que o conteúdo está incompleto.
+${closingInstruction}
 
 PROIBIDO: seções de gaps, oportunidades de pesquisa, subseções ### por tema. Mantenha conciso.`;
   }
@@ -163,7 +170,7 @@ PROIBIDO: seções de gaps, oportunidades de pesquisa, subseções ### por tema.
   // depth === 'full'
   return `${base}
 
-Sua tarefa: produzir uma REVISÃO SISTEMÁTICA COMPLETA e bem estruturada — com a qualidade de leitura de um relatório científico profissional.
+Sua tarefa: produzir uma REVISÃO BIBLIOGRÁFICA COMPLETA e bem estruturada — com a qualidade de leitura de um relatório científico profissional.
 
 REGRAS DE FORMATO (siga à risca):
 1. A PRIMEIRA linha do documento deve ser EXATAMENTE: # 📚 TL;DR Geral
@@ -197,5 +204,6 @@ REGRAS DE FORMATO (siga à risca):
    (lista numerada 1. **Título:** Explicação)
 
 4. Prefira parágrafos bem desenvolvidos a listas de bullet points. Use bullets apenas dentro das subseções de iniciativas.
-5. Encerre com um parágrafo curto SEM heading convidando o usuário a aprofundar algum aspecto específico ou a iniciar uma nova busca sobre um tema relacionado.`;
+5. Indicação de tamanho: o modo \`full\` deve produzir aproximadamente 800–1200 palavras (excluindo a tabela comparativa) — denso o suficiente para um relatório científico, conciso o suficiente para ser lido em uma sessão.
+6. ${closingInstruction}`;
 }

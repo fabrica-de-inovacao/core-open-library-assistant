@@ -239,6 +239,19 @@ CATEGORIAS:
 - "quick_lookup": quer encontrar alguns artigos ou referências sobre um tema de forma pontual, sem precisar de análise densa.
 - "systematic_review": quer uma revisão bibliográfica, mapeamento da literatura, estado da arte, análise sistemática com múltiplos artigos.
 
+EXEMPLOS (few-shot):
+Input: "o que é aprendizado por reforço?"
+{"intent":"conversational","reasoning":"Pergunta definicional pura, sem interesse em busca bibliográfica"}
+
+Input: "me indica alguns papers sobre transfer learning em NLP"
+{"intent":"quick_lookup","reasoning":"Usuário quer alguns artigos pontuais, sem revisão sistemática"}
+
+Input: "faça uma revisão bibliográfica sobre gamificação no ensino superior"
+{"intent":"systematic_review","reasoning":"Pedido explícito de revisão com múltiplos artigos e análise densa"}
+
+Input: "me fala sobre IA na educação" (ambíguo)
+{"intent":"quick_lookup","reasoning":"Input ambíguo sem indicador sistemático — padrão: quick_lookup"}
+
 Retorne APENAS um JSON com dois campos: "intent" (uma das três palavras exatas acima) e "reasoning" (1 frase curta).
 Exemplo: {"intent":"systematic_review","reasoning":"Usuário quer mapear a literatura sobre gamificação"}`,
       prompt: `Input do usuário: "${input.slice(0, 500)}"`,
@@ -312,9 +325,7 @@ export async function runRouterAgent(
   // Camada 1: lexical
   const lexResult = lexicalRoute(input);
   if (lexResult) {
-    logger.debug(
-      `[RouterAgent] intent=${lexResult.intent} | confidence=rule | words=${wordCount}`
-    );
+    logger.debug(`[RouterAgent] intent=${lexResult.intent} | confidence=rule | words=${wordCount}`);
     return lexResult;
   }
 

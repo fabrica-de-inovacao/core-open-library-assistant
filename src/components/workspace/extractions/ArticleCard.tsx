@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import type { ArticleCardProps } from './types';
 import { STATUS_CONFIG } from './config';
 import { copyToClipboard, buildCitationApa, buildCitationAbnt } from './helpers';
+import { CitationGraphPanel, type CitationGraphData } from '@/components/CitationGraphPanel';
 
 // ---------------------------------------------------------------------------
 // ArticleCard
@@ -378,6 +379,14 @@ export function ArticleCard({
                 )}
               </button>
             </div>
+          )}
+
+          {/* Fase 6 (P-seguinte): Painel de Papers Relacionados (Grafo de Citações) */}
+          {article.citationGraph != null && (
+            <CitationGraphPanel
+              articleTitle={article.title ?? undefined}
+              citationGraph={article.citationGraph as CitationGraphData}
+            />
           )}
         </div>
       </div>

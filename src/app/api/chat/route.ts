@@ -49,7 +49,7 @@ function describeToolCalls(messages: any[]): string {
         const qId = (output.query_id ?? '').slice(0, 8);
         lines.push(`- Busca Global (OpenAlex): "${q}"${qId ? ` [qid:${qId}…]` : ''}`);
       } else if (toolName === 'generate_systematic_review') {
-        lines.push(`- Revisão sistemática gerada e entregue ao usuário.`);
+        lines.push(`- Revisão bibliográfica gerada e entregue ao usuário.`);
       } else if (toolName === 'add_article_by_doi') {
         lines.push(`- Artigo adicionado via DOI: ${input.doi ?? '?'}`);
       }
@@ -263,9 +263,26 @@ export async function POST(req: Request) {
 
   const modifiedMessages = [...messages];
 
-  const systemPromptOverride = `Você é o SOL Assistant, um pesquisador sênior em Ciência da Computação especializado em revisão sistemática de literatura acadêmica.
+  // Lê nome do usuário logado para personalização do Orchestrator
+  const userName = session?.user?.name?.split(' ')[0] ?? null; // Primeiro nome apenas
 
-**══ REGRA ABSOLUTA — SAÍDA DA REVISÃO SISTEMÁTICA ══**
+  const systemPromptOverride = `Você é o SOL Assistant, um pesquisador especializado em literatura de Computação e Tecnologia, atuando como assistente de revisão bibliográfica para a comunidade acadêmica brasileira.
+${
+  userName
+    ? `\nO usuário com quem você está conversando se chama **${userName}**. Use o nome espontaneamente em saudações de início de sessão e no convite de exploração ao final de uma revisão — nunca mais de 1 vez por resposta.`
+    : ''
+}
+
+**══ TOM E ESTILO ══**
+Você mantém um tom técnico-científico, direto e respeitoso. Emojis são permitidos de forma MUITO moderada — apenas quando há emoção genuína:
+- ✅ Saudação inicial (1 emoji máximo): "Olá${userName ? `, ${userName}` : ''}! Vou buscar artigos sobre isso. 🔍"
+- ✅ Convite de exploração ao final de revisão (1 emoji máximo): "Quer explorar algum aspecto específico? 📖"
+- ✅ Quando encontrar muitos resultados inesperadamente bons: "Encontrei 18 artigos relevantes! 🎯"
+- ❌ Proibido: emojis em afirmações factuais, citações, mensagens de erro ou refinamento
+- ❌ Proibido: mais de 1 emoji por bloco de resposta
+- ❌ Proibido: emojis em seções ## ou ### (nunca substituem clareza técnica)
+
+**══ REGRA ABSOLUTA — SAÍDA DA REVISÃO BIBLIOGRÁFICA ══**
 Quando a ferramenta \`generate_systematic_review\` retornar \`success: true\` com um campo \`review\` preenchido, a sua resposta DEVE ser EXATAMENTE o conteúdo literal do campo \`review\`, copiado palavra por palavra, sem NENHUMA alteração.
 PROIBIDO totalmente: preâmbulos, comentários, análises, ressalvas, observações sobre contagem de artigos, menções a discrepâncias ou qualquer texto que não seja o próprio conteúdo de \`review\`.
 Comece sua resposta diretamente na primeira linha do campo \`review\` (que inicia com \`# 📚\`).
@@ -321,7 +338,7 @@ Exceção: saudações puras ("oi", "olá", "tudo bem?") sem conteúdo temático
       fallbackInstruction = `
 
 **CONTEXTO DA SESSÃO ATUAL:**
-O usuário já tem uma revisão sistemática gerada para a query: "${qData.originalQuery ?? queryId}".
+O usuário já tem uma revisão bibliográfica gerada para a query: "${qData.originalQuery ?? queryId}".
 Foram encontrados ${doneArticles.length} artigos processados nesta sessão.
 
 **MODO CONVERSA SOBRE A BIBLIOGRAFIA:**
@@ -537,7 +554,11 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
     // Cada builder recebe o contexto da request (userId/chatId) via closure.
     tools: {
       // Fase C (Batch 4 C-2): passa synthesisDepth para SOL tool limitar queries
-      propose_search_sol_database: buildProposeSearchSolDatabaseTool({ sessionUserId, chatId, synthesisDepth }),
+      propose_search_sol_database: buildProposeSearchSolDatabaseTool({
+        sessionUserId,
+        chatId,
+        synthesisDepth,
+      }),
       propose_search_global_database: buildProposeSearchGlobalDatabaseTool({
         sessionUserId,
         chatId,
@@ -548,6 +569,7 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
         chatId,
         queryId,
         synthesisDepth,
+        userName,
       }),
     } as any,
     onFinish: async (event) => {

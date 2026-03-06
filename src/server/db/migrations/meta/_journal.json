@@ -43,6 +43,20 @@
       "when": 1772332800000,
       "tag": "0005_pgvector_and_url_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1772419200000,
+      "tag": "0006_citation_graph_and_query_embed",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1772505600000,
+      "tag": "0007_hnsw_and_match_articles",
+      "breakpoints": true
     }
   ]
 }

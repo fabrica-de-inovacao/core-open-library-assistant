@@ -453,12 +453,18 @@ export function useChatOrchestration({
       for (const part of msg.parts) {
         if (!isToolOrDynamicToolUIPart(part)) continue;
         const toolName = getToolOrDynamicToolName(part);
-        if (toolName !== 'propose_search_sol_database' && toolName !== 'propose_search_global_database') continue;
+        if (
+          toolName !== 'propose_search_sol_database' &&
+          toolName !== 'propose_search_global_database'
+        )
+          continue;
         if (part.state !== 'output-available') continue;
-        const output = normalizeToolOutput((part as any).output) as {
-          success: boolean;
-          query_id?: string;
-        } | undefined;
+        const output = normalizeToolOutput((part as any).output) as
+          | {
+              success: boolean;
+              query_id?: string;
+            }
+          | undefined;
         if (output?.success && output.query_id) return output.query_id;
       }
     }
@@ -473,7 +479,8 @@ export function useChatOrchestration({
       for (const part of toolParts) {
         const toolName = getToolOrDynamicToolName(part);
         if (
-          (toolName === 'propose_search_sol_database' || toolName === 'propose_search_global_database') &&
+          (toolName === 'propose_search_sol_database' ||
+            toolName === 'propose_search_global_database') &&
           part.state === 'output-available'
         ) {
           const output = (part as any).output as {
@@ -633,10 +640,11 @@ export function useChatOrchestration({
   }, [messages]);
 
   const displayArticles = useMemo(() => {
-    const arr =
-      articles?.length ? articles
-      : isSearchRunning && previousArticlesRef.current.length ? previousArticlesRef.current
-      : articles ?? [];
+    const arr = articles?.length
+      ? articles
+      : isSearchRunning && previousArticlesRef.current.length
+        ? previousArticlesRef.current
+        : (articles ?? []);
 
     if (!arr.length) return arr;
 
@@ -800,7 +808,7 @@ export function useChatOrchestration({
           };
           if (stored.browserNotifications && Notification.permission === 'granted') {
             new Notification('SOL O.L.A.', {
-              body: 'Seus artigos foram processados. A revisão sistemática está pronta!',
+              body: 'Seus artigos foram processados. A revisão bibliográfica está pronta!',
               icon: '/favicon.ico',
             });
           }
@@ -819,7 +827,7 @@ export function useChatOrchestration({
           });
         } else {
           sendMessageRef.current({
-            text: `[SISTEMA] Todos os artigos foram processados. Por favor, gere agora a revisão sistemática consolidada chamando a ferramenta generate_systematic_review.`,
+            text: `[SISTEMA] Todos os artigos foram processados. Por favor, gere agora a revisão bibliográfica consolidada chamando a ferramenta generate_systematic_review.`,
           });
         }
       };
@@ -856,7 +864,9 @@ export function useChatOrchestration({
         const merged = [...(articleCountRef.current ?? []), ...dbArts];
         dispatchSynthesisMessage(merged);
       })();
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (queryStatus === 'needs_refinement') {
@@ -899,9 +909,9 @@ export function useChatOrchestration({
       // Guard: não disparar se já existe uma proposta global — significa que o erro
       // veio de uma busca global (502/0), não de uma busca SOL sem resultados.
       const hasGlobalProposal = messages.some((m) =>
-        m.parts?.filter(isToolOrDynamicToolUIPart).some(
-          (p) => getToolOrDynamicToolName(p) === 'propose_search_global_database'
-        )
+        m.parts
+          ?.filter(isToolOrDynamicToolUIPart)
+          .some((p) => getToolOrDynamicToolName(p) === 'propose_search_global_database')
       );
       if (hasGlobalProposal) return;
 

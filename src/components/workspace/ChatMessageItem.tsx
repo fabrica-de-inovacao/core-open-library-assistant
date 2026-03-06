@@ -19,6 +19,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from 'sonner';
 import { SearchProposalCard, GlobalSearchProposalCard, SearchJourneyCard } from './proposals';
+import { SimilarQueryBanner, type SimilarQueryInfo } from './SimilarQueryBanner';
 import type { ExecuteSearchFn, SearchAttempt } from './proposals';
 
 // ---------------------------------------------------------------------------
@@ -117,7 +118,8 @@ function getToolStatus(
     // Considera concluída se: (a) SDK reportou output-available, OU
     // (b) output já existe no part (carregado do DB após reload), OU
     // (c) stream já terminou E a mensagem mãe tem texto (LLM respondeu após a tool).
-    const isDone = state === 'output-available' || output !== undefined || (!isStreaming && hasMessageText);
+    const isDone =
+      state === 'output-available' || output !== undefined || (!isStreaming && hasMessageText);
     if (!isDone) {
       return {
         label: 'Gerando síntese sistemática…',
@@ -457,16 +459,22 @@ export const ChatMessageItem = React.memo(
                     const queries: string[] | undefined = output?.queries ?? input?.queries;
                     const queryId: string | undefined = output?.query_id ?? undefined;
                     if (!queries || queries.length === 0) return null;
+                    const similarQuery: SimilarQueryInfo | null = output?.similar_query ?? null;
                     return (
-                      <SearchProposalCard
-                        key={toolCallId}
-                        queries={queries}
-                        queryId={queryId}
-                        onExecute={onExecuteSearch}
-                        onCancel={onCancelSearch}
-                        isExecuted={queryId ? executedProposalIds?.has(queryId) : false}
-                        isRunning={queryId ? (runningSearches?.has(queryId) ?? false) : false}
-                      />
+                      <>
+                        {similarQuery && output?.similar_query_found && (
+                          <SimilarQueryBanner key={`banner-${toolCallId}`} info={similarQuery} />
+                        )}
+                        <SearchProposalCard
+                          key={toolCallId}
+                          queries={queries}
+                          queryId={queryId}
+                          onExecute={onExecuteSearch}
+                          onCancel={onCancelSearch}
+                          isExecuted={queryId ? executedProposalIds?.has(queryId) : false}
+                          isRunning={queryId ? (runningSearches?.has(queryId) ?? false) : false}
+                        />
+                      </>
                     );
                   }
                   const query: string | undefined = output?.query ?? input?.query;

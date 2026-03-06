@@ -104,6 +104,9 @@ export const searchQueries = pgTable(
     expandedQuery: text('expanded_query'),
     summary: text('summary'), // Saved general TL;DR
     status: varchar('status', { length: 50 }).notNull(), // 'proposed', 'searching', 'processing', 'done', 'failed'
+    // Fase 6 (P-seguinte): embedding semântico da query (gemini-embedding-001, 768 dims).
+    // Permite detectar queries similares anteriores e alimentar RAG de cache entre sessões.
+    queryEmbedding: vector('query_embedding', { dimensions: 768 }),
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
   (table) => ({
@@ -142,6 +145,9 @@ export const articles = pgTable(
     // I-03: P-19 — embedding do abstract para reranking semântico.
     // Migrado de TEXT para vector(768) em 0005_pgvector_and_url_idx.sql.
     abstractEmbedding: vector('abstract_embedding', { dimensions: 768 }),
+    // Fase 6 (P-seguinte): Grafo de citações via Semantic Scholar API.
+    // Formato: { references: [{id, title, doi}...], citations: [...], fetched_at: ISO }
+    citationGraph: jsonb('citation_graph'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },

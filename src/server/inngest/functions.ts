@@ -328,6 +328,102 @@ export const processSingleArticle = inngest.createFunction(
         });
       }
 
+      // ── STEP 2.5: Semantic Scholar — Grafo de Citações ───────────────────
+      // Fase 6 (P-seguinte): busca referências (backward) e citações (forward)
+      // via Semantic Scholar API (gratuita, sem chave de API).
+      // Armazena JSONB em citation_graph: { references, citations, fetched_at }.
+      // Rate limit sem chave: ~1 req/seg. Concurrency=4 por usuário → até 4 artigos
+      // chegam ao step simultaneamente → jitter largo (0–20s) distribui os requests;
+      // retries usam esperas longas (30s/60s/90s) para evitar burst sincronizado.
+      if (scrapeResult?.doi) {
+        await step.run(`semantic-scholar-graph-${article.id}`, async () => {
+          const doi = scrapeResult.doi!;
+
+          // Jitter largo: distribui até 4 requisições paralelas a ~1 req/seg
+          const jitterMs = Math.floor(Math.random() * 20_000); // 0–20s
+          await new Promise((r) => setTimeout(r, jitterMs));
+
+          const ssUrl =
+            `https://api.semanticscholar.org/graph/v1/paper/DOI:${encodeURIComponent(doi)}` +
+            `?fields=references.title,references.externalIds,citations.title,citations.externalIds`;
+
+          const MAX_RETRIES = 3;
+          // Waits longos para evitar burst sincronizado nos retries: 30s, 60s, 90s
+          const RETRY_WAITS_MS = [30_000, 60_000, 90_000];
+          let response: Response | null = null;
+
+          for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+              response = await fetchWithTimeout(
+                ssUrl,
+                { headers: { 'User-Agent': 'SOLAssistant/1.0 (mailto:dev@example.com)' } },
+                12_000
+              );
+            } catch (fetchErr) {
+              if (attempt === MAX_RETRIES) throw fetchErr;
+              await new Promise((r) => setTimeout(r, RETRY_WAITS_MS[attempt - 1]));
+              continue;
+            }
+
+            if (response.status === 429) {
+              // Respeita Retry-After se presente; senão usa esperas fixas longas
+              const retryAfter = response.headers.get('Retry-After');
+              const waitMs = retryAfter
+                ? parseInt(retryAfter, 10) * 1000
+                : RETRY_WAITS_MS[attempt - 1]; // 30s, 60s, 90s
+              logger.warn(
+                `[Inngest] ⚠️ SemanticScholar 429 | doi=${doi} | tentativa=${attempt}/${MAX_RETRIES} | wait=${waitMs}ms`
+              );
+              if (attempt < MAX_RETRIES) {
+                await new Promise((r) => setTimeout(r, waitMs));
+                continue;
+              }
+              // Esgotou retries — falha silenciosa (não bloqueia o artigo)
+              logger.warn(
+                `[Inngest] ⚠️ SemanticScholar 429 esgotou retries | doi=${doi} | article=${article.id}`
+              );
+              return;
+            }
+
+            if (!response.ok) {
+              logger.warn(
+                `[Inngest] ⚠️ SemanticScholar HTTP ${response.status} | doi=${doi} | article=${article.id}`
+              );
+              return;
+            }
+
+            // Sucesso — sai do loop de retry
+            break;
+          }
+
+          if (!response?.ok) return;
+
+          try {
+            const data = (await response.json()) as {
+              references?: { title?: string; externalIds?: { DOI?: string } }[];
+              citations?: { title?: string; externalIds?: { DOI?: string } }[];
+            };
+            const mapPaper = (p: { title?: string; externalIds?: { DOI?: string } }) => ({
+              title: p.title ?? null,
+              doi: p.externalIds?.DOI ?? null,
+            });
+            const citationGraph = {
+              references: (data.references ?? []).map(mapPaper),
+              citations: (data.citations ?? []).map(mapPaper),
+              fetched_at: new Date().toISOString(),
+            };
+            await db.update(articles).set({ citationGraph }).where(eq(articles.id, article.id));
+            logger.log(
+              `[Inngest] 📚 SemanticScholar OK | refs=${citationGraph.references.length} | cites=${citationGraph.citations.length} | article=${article.id}`
+            );
+          } catch (err) {
+            logger.warn(
+              `[Inngest] ⚠️ SemanticScholar parse falhou | article=${article.id}: ${(err as Error).message}`
+            );
+          }
+        });
+      }
+
       // Fase 3 (P-19): worker PyMuPDF é sempre chamado para artigos SOL.
       // O corpus SOL é LaTeX Type1/Type3 — PyMuPDF extrai 30k+ chars corretamente.
       // abstract_only é setado pelo próprio worker quando PyMuPDF + OCR falham
@@ -522,7 +618,8 @@ export const processSingleArticle = inngest.createFunction(
 \uD83D\uDD0D Problema: [qual problema o artigo endereça, em 1 frase]
 \uD83D\uDEE0 Método: [abordagem ou metodologia principal, em 1 frase]
 ✅ Resultado: [principal conclusão ou contribuição, em 1 frase]
-REGRAS: Máximo 600 caracteres. Obrigatoriamente em ${tldrLangLabel}. Sem texto fora do template.`,
+REGRAS: Máximo 600 caracteres. Obrigatoriamente em ${tldrLangLabel}. Sem texto fora do template.
+FALLBACK: Se o conteúdo do artigo fornecido for fragmentado, corrompido ou ilegível (ex: PDF escaneado), baseie-se apenas no campo "Resumo do autor" fornecido acima. Se ambos forem indisponíveis, indique "Não foi possível gerar síntese" no campo Resultado.`,
             prompt: `${contextPrefix ? contextPrefix + '\n\n' : ''}Gere a síntese:\n\n${markdownContent.substring(0, 30000)}`,
           });
           logger.log(`[Inngest] ✅ TL;DR OK | ${text.length} chars | article=${article.id}`);
@@ -542,6 +639,9 @@ REGRAS: Máximo 600 caracteres. Obrigatoriamente em ${tldrLangLabel}. Sem texto 
           const { embedding } = await embed({
             model: getEmbeddingModel(),
             value: text.slice(0, 2000),
+            // gemini-embedding-001 usa MRL (padrão 3072 dims) — truncamos para 768
+            // para ser compatível com a coluna vector(768) no Supabase.
+            providerOptions: { google: { outputDimensionality: 768 } },
           });
           await db
             .update(articles)
