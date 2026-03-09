@@ -31,6 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { usePanelRef } from 'react-resizable-panels';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { ChatMessageItem, TypingIndicator } from '@/components/workspace/ChatMessageItem';
@@ -117,19 +118,22 @@ export function ChatView({
   const { hasArticles } = orchestration;
   useEffect(() => {
     if (hasArticles && !isPanelOpen) {
-      setIsPanelOpen(true);
-      // Recolhe a sidebar para dar espaço ao painel do acervo (só em desktop)
-      if (!isMobile) setSidebarOpen(false);
-      // Duplo rAF garante que o painel já está no DOM antes do expand
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          extractionsPanelRef.current?.expand();
-          mainPanelRef.current?.resize('58');
-        })
-      );
+      if (!isMobile) {
+        setIsPanelOpen(true);
+        // Recolhe a sidebar para dar espaço ao painel do acervo (só em desktop)
+        setSidebarOpen(false);
+        // Duplo rAF garante que o painel já está no DOM antes do expand
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            extractionsPanelRef.current?.expand();
+            mainPanelRef.current?.resize('58');
+          })
+        );
+      }
+      // No mobile, deixamos colapsado por padrão conforme requisição
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasArticles]);
+  }, [hasArticles, isMobile]);
 
   // ── Scroll ───────────────────────────────────────────────────────────────
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -361,7 +365,7 @@ export function ChatView({
         </ResizablePanel>
 
         {/* ── Painel lateral de extrações ── sempre montado quando há artigos ── */}
-        {hasArticles && (
+        {hasArticles && !isMobile && (
           <>
             <ResizableHandle withHandle />
             <ResizablePanel
@@ -390,12 +394,42 @@ export function ChatView({
         )}
       </ResizablePanelGroup>
 
+      {/* ── Sheet para Mobile: Painel lateral vira drawer ── */}
+      {hasArticles && isMobile && (
+        <Sheet open={isPanelOpen} onOpenChange={setIsPanelOpen}>
+          <SheetContent
+            side="right"
+            showCloseButton={false}
+            className="disable-sheet-focus flex w-[90vw] flex-col border-l p-0 sm:w-[540px]"
+          >
+            {/* Ocultando title/desc para acessibilidade mas sem visual bagunçado */}
+            <div className="sr-only">
+              <SheetTitle>Acervo de Extração</SheetTitle>
+              <SheetDescription>Resultados e PDFs extraídos da busca atual.</SheetDescription>
+            </div>
+            <ExtractionsPanel
+              articles={articles}
+              activeQueryId={activeQueryId}
+              highlightedRow={highlightedRow}
+              hasZeroResults={hasZeroResults}
+              isSearchRunning={isSearchRunning}
+              realtimeStatus={realtimeStatus}
+              onCollapse={() => setIsPanelOpen(false)}
+              onCancelSearch={handleCancelSearch}
+            />
+          </SheetContent>
+        </Sheet>
+      )}
+
       {/* ── Aba lateral para re-abrir o painel do acervo — sempre no DOM quando há artigos, visibilidade via CSS ── */}
       {hasArticles && (
         <button
           onClick={() => {
-            extractionsPanelRef.current?.expand();
-            mainPanelRef.current?.resize('58');
+            setIsPanelOpen(true);
+            if (!isMobile) {
+              extractionsPanelRef.current?.expand();
+              mainPanelRef.current?.resize('58');
+            }
           }}
           className={`group/tab border-border/60 bg-background hover:bg-muted hover:border-primary/40 absolute top-1/2 right-0 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-2 rounded-l-xl border border-r-0 px-2.5 py-4 shadow-md transition-all duration-300 ${
             !isPanelOpen
