@@ -4,13 +4,30 @@
  * Estes módulos são importados pelo route.ts e injetados no streamText.
  */
 
-import { tool } from 'ai';
+import { tool, embed } from 'ai';
 import { z } from 'zod';
-import { desc, eq, ne, and } from 'drizzle-orm';
+import { desc, eq, ne, and, sql } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries } from '@/server/db/schema';
 import { runStrategyAgent } from '@/server/agents/strategy-agent';
+import type { SynthesisDepth } from '@/server/agents/synthesis-agent';
+import { getEmbeddingModel } from '@/lib/ai-provider';
+import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
+
+/** Artigo retornado pelo RPC match_articles do Supabase (RAG de Cache) */
+interface CachedArticleMatch {
+  id: string;
+  title: string;
+  doi: string | null;
+  abstract: string | null;
+  tldr_content: string | null;
+  source_name: string | null;
+  publication_year: number | null;
+  citation_count: number | null;
+  original_url: string;
+  similarity: number;
+}
 
 const searchSchema = z.object({
   topic: z
@@ -30,6 +47,10 @@ const searchSchema = z.object({
 export interface ToolContext {
   sessionUserId: string | null;
   chatId: string | null;
+  /** Nome do usuário logado (primeiro nome) — usado na síntese (Prompt 7/8/9) */
+  userName?: string | null;
+  /** Fase C (Batch 4 C-2): limita número de queries geradas pelo StrategyAgent */
+  synthesisDepth?: SynthesisDepth;
 }
 
 export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
@@ -76,10 +97,22 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
         }
 
         // I-04: strategy-agent gera todas as queries a partir do topic
+        // Fase C (Batch 4 C-2): cap de queries baseado na profundidade de síntese.
+        // brief → 1 query (quick_lookup não precisa de múltiplas estratégias)
+        // standard → 2 queries
+        // full / undefined → sem cap (StrategyAgent decide)
+        const maxQueriesOverride =
+          ctx.synthesisDepth === 'brief' ? 1 : ctx.synthesisDepth === 'standard' ? 2 : undefined;
+
         let finalQueries = rawQueries;
         if (topic) {
           try {
-            const strategy = await runStrategyAgent(topic, rawQueries, previousFailedQueries);
+            const strategy = await runStrategyAgent(
+              topic,
+              rawQueries,
+              previousFailedQueries,
+              maxQueriesOverride
+            );
             finalQueries = strategy.queries;
             logger.info(
               `[Tool] StrategyAgent: geradas ${finalQueries.length} queries para tópico "${topic.slice(0, 60)}"`
@@ -97,6 +130,93 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
         // O LLM sempre passa rawQueries=[] conforme instruído, logo originalCombined seria "".
         // Usa `topic` como fallback para que o Inngest RelevanceGate tenha contexto real.
         const storedOriginalQuery = originalCombined || topic || '';
+
+        // ── Fase 6 (P-seguinte): RAG de Cache + Embedding da Query (1.2.2 + 1.2.3) ──
+        // 1. Gera embedding semântico da query para persistência e para pré-busca.
+        // 2. Consulta RPC match_articles: artigos similares já na nossa base.
+        // 3. Se ≥ 3 artigos relevantes → retorna cache_hit=true ao Orchestrator.
+        // Falha no embedding é não-fatal — busca SOL normal prossegue normalmente.
+        let queryEmbeddingVec: number[] | undefined;
+        let cachedArticles: CachedArticleMatch[] = [];
+        if (storedOriginalQuery) {
+          try {
+            const { embedding } = await embed({
+              model: getEmbeddingModel(),
+              value: storedOriginalQuery.slice(0, 2000),
+              providerOptions: { google: { outputDimensionality: 768 } },
+            });
+            queryEmbeddingVec = embedding;
+            logger.info(
+              `[Tool] 🧮 Query embedding gerado | dims=${embedding.length} | topic="${storedOriginalQuery.slice(0, 60)}…"`
+            );
+
+            // Pré-busca semântica na base própria via RPC Supabase
+            const { data: matches, error: rpcErr } = await supabase.rpc('match_articles', {
+              query_embedding: embedding,
+              match_threshold: 0.75,
+              match_count: 20,
+              p_user_id: ctx.sessionUserId ?? null,
+            });
+            if (rpcErr) {
+              logger.warn('[Tool] ⚠️ match_articles RPC error:', rpcErr.message);
+            } else if (matches && (matches as CachedArticleMatch[]).length > 0) {
+              cachedArticles = matches as CachedArticleMatch[];
+              logger.info(
+                `[Tool] 🗃️ RAG Cache: ${cachedArticles.length} artigos similares na base própria (threshold=0.75)`
+              );
+            }
+          } catch (embedErr) {
+            logger.warn(
+              '[Tool] ⚠️ Query embedding / RAG cache falhou — busca SOL normal:',
+              (embedErr as Error).message
+            );
+          }
+        }
+
+        // ── Detecção de busca similar nas queries anteriores do usuário (1.2.3) ──
+        // Compara o embedding da query atual contra queries anteriores do mesmo usuário
+        // usando pgvector. Se similarity >= 0.85 → informa o usuário via banner na UI.
+        // Falha é não-fatal.
+        let similarPreviousQuery: {
+          originalQuery: string;
+          createdAt: string;
+          similarity: number;
+        } | null = null;
+        if (queryEmbeddingVec && ctx.sessionUserId) {
+          try {
+            const embeddingLiteral = JSON.stringify(queryEmbeddingVec);
+            const rows = await db.execute(sql`
+              SELECT original_query, created_at,
+                     1 - (query_embedding <=> ${embeddingLiteral}::vector) AS similarity
+              FROM search_queries
+              WHERE user_id = ${ctx.sessionUserId}
+                AND query_embedding IS NOT NULL
+              ORDER BY query_embedding <=> ${embeddingLiteral}::vector
+              LIMIT 1
+            `);
+            if (rows.length > 0) {
+              const row = rows[0] as {
+                original_query: string;
+                created_at: string;
+                similarity: number;
+              };
+              const sim = Number(row.similarity);
+              if (sim >= 0.85) {
+                similarPreviousQuery = {
+                  originalQuery: row.original_query,
+                  createdAt: row.created_at,
+                  similarity: sim,
+                };
+                logger.info(
+                  `[Tool] 🔁 Query similar detectada (${Math.round(sim * 100)}%) — "${row.original_query.slice(0, 60)}"`
+                );
+              }
+            }
+          } catch (simErr) {
+            logger.warn('[Tool] ⚠️ Detecção de query similar falhou:', (simErr as Error).message);
+          }
+        }
+
         const [insertedQuery] = await db
           .insert(searchQueries)
           .values({
@@ -105,6 +225,7 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
             status: 'proposed',
             userId: ctx.sessionUserId,
             chatId: ctx.chatId,
+            ...(queryEmbeddingVec ? { queryEmbedding: queryEmbeddingVec } : {}),
           })
           .returning();
 
@@ -117,7 +238,36 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
           proposed: true,
           query_id: insertedQuery.id,
           queries: finalQueries,
-          message: 'Plano de busca montado e apresentado ao usuário na tela para execução manual.',
+          cache_hit: cachedArticles.length >= 3,
+          cached_articles_count: cachedArticles.length,
+          // Repassa os artigos em cache ao Orchestrator quando há cache_hit
+          // O Orchestrator pode mencioná-los ao usuário antes de iniciar a busca SOL
+          cached_articles:
+            cachedArticles.length >= 3
+              ? cachedArticles.slice(0, 5).map((a) => ({
+                  title: a.title,
+                  similarity: Math.round(a.similarity * 100),
+                  source: a.source_name,
+                  year: a.publication_year,
+                }))
+              : [],
+          // Busca similar detectada (1.2.3) — renderiza banner na UI
+          similar_query_found: !!similarPreviousQuery,
+          similar_query: similarPreviousQuery
+            ? {
+                topic: similarPreviousQuery.originalQuery,
+                date: new Date(similarPreviousQuery.createdAt).toLocaleDateString('pt-BR', {
+                  day: '2-digit',
+                  month: 'short',
+                  year: 'numeric',
+                }),
+                similarity: Math.round(similarPreviousQuery.similarity * 100),
+              }
+            : null,
+          message:
+            cachedArticles.length >= 3
+              ? `Plano de busca montado. ${cachedArticles.length} artigos similares encontrados na base. Apresentado ao usuário para execução.`
+              : 'Plano de busca montado e apresentado ao usuário na tela para execução manual.',
         };
       } catch (err) {
         logger.error('[Tool] propose_search_sol_database falhou:', err);
@@ -137,14 +287,15 @@ export function buildProposeSearchGlobalDatabaseTool(ctx: ToolContext) {
     description:
       'Propõe uma busca na base científica global OpenAlex. Regras críticas para a query: ' +
       '(1) Termos genéricos SEMPRE em inglês. ' +
-      '(2) Nomes próprios em Português (ex: "Mermãs Digitais", "ProInfo") NÃO aparecem na literatura internacional — NUNCA os use como termo AND mandatório. Em vez disso, use os CONCEITOS que o projeto representa (ex: "digital inclusion" AND "women" AND education). ' +
-      '(3) Se o usuário citou um projeto/programa, extraia os conceitos centrais e busque por eles. ' +
-      '(4) Prefira queries simples e conceituais a queries booleanas complexas.',
+      '(2) Se o usuário citou um nome próprio de projeto, programa, empresa ou equipe (ex: "Mermãs Digitais", "ProInfo"), INCLUA-O ENTRE ASPAS DUPLAS na query — ele pode estar indexado no OpenAlex. O sistema tenta automaticamente uma busca sem o nome próprio caso não encontre resultados. ' +
+      '(3) Combine o nome próprio com conceitos gerais em inglês: ex: "\"Mermãs Digitais\" AND (education OR \"digital inclusion\")". ' +
+      '(4) Para buscas puramente conceituais (sem nome próprio), use apenas termos em inglês. ' +
+      '(5) Prefira queries simples a queries booleanas complexas.',
     inputSchema: z.object({
       query: z
         .string()
         .describe(
-          'String de busca em inglês com conceitos gerais. NÃO use nomes próprios em Português como AND mandatório (eles não aparecem no OpenAlex). Ex correto: "digital inclusion women education computing" ou "(\"digital literacy\" OR \"digital inclusion\") AND women AND education". Ex errado: "\"Mermãs Digitais\" AND education"'
+          'String de busca para o OpenAlex. Se o input do usuário contém nome próprio de projeto/programa/empresa, inclua-o entre aspas duplas e adicione conceitos em inglês como contexto. Ex. com nome próprio: "\"Mermãs Digitais\" AND (education OR \"digital inclusion\")" ou "\"ProInfo\" AND Brazil AND education". Ex. sem nome próprio: "digital inclusion women education computing"'
         ),
     }),
     execute: async (input) => {

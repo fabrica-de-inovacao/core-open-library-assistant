@@ -18,8 +18,7 @@ import { InputToolbar } from '@/components/workspace/InputToolbar';
 import { TrendingTopics } from '@/components/workspace/home/TrendingTopics';
 import { signIn } from 'next-auth/react';
 import type { useAttachments } from '@/hooks/useAttachments';
-import type { SynthesisMode } from '@/hooks/useChatOrchestration';
-import type { ModelValue } from '@/hooks/useSearchSettings';
+import type { AnalysisMode, ModelValue } from '@/hooks/useSearchSettings';
 import type { TrendingTopic } from '@/app/api/trending-topics/route';
 
 // ---------------------------------------------------------------------------
@@ -33,17 +32,13 @@ interface HomeViewProps {
   onSubmitQuery: (text: string) => void;
   isLoading: boolean;
 
-  // Limite de artigos
-  searchLimit: 10 | 25;
-  onSearchLimitChange: (v: 10 | 25) => void;
+  // Modo de análise unificado (substitui searchLimit + synthesisMode)
+  analysisMode?: AnalysisMode;
+  onAnalysisModeChange?: (m: AnalysisMode) => void;
 
   // Modelo de IA
   modelId?: ModelValue;
   onModelChange?: (m: ModelValue) => void;
-
-  // Fase C (IA-04): modo de síntese
-  synthesisMode?: SynthesisMode;
-  onSynthesisModeChange?: (m: SynthesisMode) => void;
 
   // Anexos (PDF/DOI) — hook consolidado do useAttachments
   attachments: AttachmentsReturn;
@@ -62,12 +57,10 @@ interface HomeViewProps {
 export function HomeView({
   onSubmitQuery,
   isLoading,
-  searchLimit,
-  onSearchLimitChange,
+  analysisMode = 'auto',
+  onAnalysisModeChange,
   modelId,
   onModelChange,
-  synthesisMode = 'auto',
-  onSynthesisModeChange,
   attachments,
   authStatus,
   onShowLoginModal,
@@ -141,7 +134,7 @@ export function HomeView({
             <span className="text-primary">como você pensa</span>
           </h1>
           <p className="text-muted-foreground mx-auto max-w-xl text-[15px] leading-relaxed">
-            Só descreva o que você quer pesquisar. A SOL encontra, lê e organiza a literatura
+            Só descreva o que você quer pesquisar. A C.O.R.E. encontra, lê e organiza a literatura
             científica ibero-americana mais relevante para você.
           </p>
         </div>
@@ -174,10 +167,8 @@ export function HomeView({
             <InputToolbar
               modelId={modelId}
               onModelChange={onModelChange}
-              synthesisMode={synthesisMode}
-              onSynthesisModeChange={onSynthesisModeChange}
-              searchLimit={searchLimit}
-              onSearchLimitChange={onSearchLimitChange}
+              analysisMode={analysisMode}
+              onAnalysisModeChange={onAnalysisModeChange}
               leftSlot={
                 <>
                   <Popover

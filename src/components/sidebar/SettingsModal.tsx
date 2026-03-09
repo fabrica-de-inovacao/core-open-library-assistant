@@ -116,7 +116,7 @@ function TabPerfil() {
             </div>
             <Badge variant="secondary" className="mt-1 gap-1 text-[10px] font-normal">
               <CalendarDays className="size-2.5" />
-              Membro SOL Open
+              Membro C.O.R.E. Open
             </Badge>
           </div>
         </div>
@@ -345,7 +345,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab = 'perfil' }: Set
 
             <div className="border-border/50 border-t px-5 py-3.5">
               <span className="text-muted-foreground/40 font-mono text-[8px] tracking-widest uppercase">
-                SOL O.L.A · v0.9-beta
+                C.O.R.E. AI · v0.9-beta
               </span>
             </div>
           </nav>

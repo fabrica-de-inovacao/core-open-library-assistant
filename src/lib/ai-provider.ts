@@ -101,30 +101,27 @@ export function getLanguageModel(): LanguageModel {
 }
 
 /**
- * Retorna um EmbeddingModel compatível com ai@3.4.15 para o provider configurado.
+ * Retorna um EmbeddingModel compatível com ai@6.x para o provider configurado.
  * Usado pelo Inngest para computar embeddings de abstracts.
  *
  * Modelos:
- *   Google → text-embedding-004  (768 dims, multilingual)
- *   OpenAI → text-embedding-3-small  (1536 dims)
+ *   Google → gemini-embedding-001  (até 3072 dims via MRL; usamos 768 via outputDimensionality)
+ *   OpenAI → text-embedding-3-small  (suporta truncamento via dimensions param)
  *
- * Override via env: EMBEDDING_MODEL (ex: "text-embedding-004")
+ * ATENÇÃO: text-embedding-004 e text-embedding-005 foram descontinuados na API v1beta.
+ * O modelo atual é gemini-embedding-001 (lançado em junho/2025).
+ * Override via env: EMBEDDING_MODEL (ex: "gemini-embedding-001")
+ *
+ * DIMENSÃO: o embed() em functions.ts passa providerOptions: { google: { outputDimensionality: 768 } }
+ * para truncar MRL de 3072 → 768, compatível com a coluna vector(768) do Supabase.
  */
 export function getEmbeddingModel(): EmbeddingModel {
   const provider = (process.env.LLM_PROVIDER ?? 'google').toLowerCase() as SupportedProvider;
-  // Força text-embedding-004: @ai-sdk/google@3 passou a usar text-embedding-005 como default,
-  // mas esse modelo não está disponível no endpoint v1beta (retorna 404).
-  // text-embedding-004 é multilingual, 768 dims, estável em v1beta.
-  // Proteção: se o env definir 005, faz downgrade silencioso para 004.
-  const GOOGLE_SAFE_EMBEDDING = 'text-embedding-004';
   const envModel = process.env.EMBEDDING_MODEL;
   const modelId =
     provider === 'openai'
       ? (envModel ?? 'text-embedding-3-small')
-      : // Para Google: bloqueia 005 (não disponível em v1beta) → força 004
-        envModel && envModel !== 'text-embedding-005'
-        ? envModel
-        : GOOGLE_SAFE_EMBEDDING;
+      : (envModel ?? 'gemini-embedding-001'); // único modelo de embedding estável v1beta
 
   switch (provider) {
     case 'openai':

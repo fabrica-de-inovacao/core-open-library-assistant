@@ -1,5 +1,8 @@
 {
   "servers": {
+    // ── Serena: leitura semântica de código (símbolos, classes, métodos)
+    // sem precisar ler arquivos inteiros — economiza tokens por sessão.
+    // Docs: https://github.com/oraios/serena
     "serena": {
       "command": "uvx",
       "args": [
@@ -9,8 +12,45 @@
         "--context",
         "ide",
         "--project",
-        "c:/Users/FAB-PRO/Documents/GitHub/sol-open-library-assistant"
+        "sol-open-library-assistant"
+      ]
+    },
+    // ── PostgreSQL: query direta no banco (Supabase transaction pooler).
+    // O VS Code pede a DATABASE_URL na primeira ativação (campo senha).
+    // Docs: https://github.com/modelcontextprotocol/servers/tree/main/src/postgres
+    "postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "${input:databaseUrl}"
+      ]
+    },
+    // ── Memory: memória persistente entre sessões usando knowledge graph.
+    // Docs: https://github.com/modelcontextprotocol/servers/tree/main/src/memory
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    // ── Sequential Thinking: raciocínio passo a passo para tarefas complexas.
+    // Docs: https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
       ]
     }
-  }
+  },
+  "inputs": [
+    {
+      "id": "databaseUrl",
+      "type": "promptString",
+      "description": "DATABASE_URL do Supabase (pooler.supabase.com:6543)",
+      "password": true
+    }
+  ]
 }

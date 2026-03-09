@@ -14,6 +14,7 @@ import { auth } from '@/auth';
 import { db } from '@/server/db';
 import { chatSessions, searchQueries, articles } from '@/server/db/schema';
 import { inngest } from '@/server/inngest/client';
+import { logger } from '@/lib/logger';
 
 const WORKER_BASE = process.env.PYTHON_WORKER_URL ?? 'http://127.0.0.1:8000';
 
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     if (!workerRes.ok) {
       const err = await workerRes.text();
-      console.error(`[upload-pdf] Worker error ${workerRes.status}: ${err}`);
+      logger.error(`[upload-pdf] Worker error ${workerRes.status}: ${err}`);
       return NextResponse.json({ error: 'Falha na extração do PDF pelo worker' }, { status: 502 });
     }
 
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
 
     extractedMarkdown = data.content_markdown;
   } catch (err) {
-    console.error('[upload-pdf] Worker unreachable:', err);
+    logger.error('[upload-pdf] Worker unreachable:', err);
     return NextResponse.json({ error: 'Worker indisponível' }, { status: 503 });
   }
 
@@ -130,7 +131,7 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  console.log(
+  logger.info(
     `[upload-pdf] ✅ Artigo inserido | id=${article.id} | query=${query.id} | chars=${extractedMarkdown.length}`
   );
 

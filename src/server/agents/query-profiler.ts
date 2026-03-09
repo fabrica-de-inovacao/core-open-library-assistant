@@ -7,7 +7,7 @@
  * Completamente determinístico: ZERO custo LLM, execução < 1ms.
  *
  * Usado pelo StrategyAgent para calibrar quantas queries gerar e se deve
- * priorizar a base SOL, OpenAlex, ou ambas.
+ * priorizar a base C.O.R.E., OpenAlex, ou ambas.
  *
  * Fase B (IA-02): QueryProfiler heurístico.
  *

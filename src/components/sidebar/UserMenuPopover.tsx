@@ -151,7 +151,7 @@ export function UserMenuPopover() {
 
           <div className="border-border/50 border-t px-4 py-2">
             <span className="text-muted-foreground/30 font-mono text-[8px] tracking-widest uppercase">
-              SOL O.L.A · v0.9-beta · SCBC 2026
+              C.O.R.E. AI · v0.9-beta · SCBC 2026
             </span>
           </div>
         </PopoverContent>

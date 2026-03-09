@@ -21,6 +21,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { isToolOrDynamicToolUIPart, getToolOrDynamicToolName } from 'ai';
 import { signIn } from 'next-auth/react';
 import { ChevronsDown, ChevronLeft, BookOpen } from 'lucide-react';
 import {
@@ -38,9 +39,11 @@ import { QueryHistoryBar } from '@/components/workspace/QueryHistoryBar';
 import { ChatInputBar } from '@/components/workspace/ChatInputBar';
 import { AttachContent } from '@/components/workspace/AttachContent';
 import { PipelineStatusBar } from '@/components/workspace/PipelineStatusBar';
+import type { SearchAttempt } from '@/components/workspace/proposals';
 import { useSidebar } from '@/components/ui/sidebar';
 import type { useChatOrchestration } from '@/hooks/useChatOrchestration';
 import type { useAttachments } from '@/hooks/useAttachments';
+import type { AnalysisMode, ModelValue } from '@/hooks/useSearchSettings';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -55,12 +58,12 @@ interface ChatViewProps {
   orchestration: ReturnType<typeof useChatOrchestration>;
   /** Resultado completo de useAttachments — instanciado no page.tsx */
   attachments: ReturnType<typeof useAttachments>;
-  /** Limite de artigos por busca */
-  searchLimit: 10 | 25;
-  onSearchLimitChange: (v: 10 | 25) => void;
+  /** Modo de análise unificado (substitui searchLimit + synthesisMode) */
+  analysisMode?: AnalysisMode;
+  onAnalysisModeChange?: (m: AnalysisMode) => void;
   /** Modelo de IA — selector compacto no ChatInputBar */
-  modelId?: import('@/hooks/useSearchSettings').ModelValue;
-  onModelChange?: (m: import('@/hooks/useSearchSettings').ModelValue) => void;
+  modelId?: ModelValue;
+  onModelChange?: (m: ModelValue) => void;
   /** Abre modal de login — recebe o texto pendente para retomar após login */
   onShowLoginModal?: (pendingText?: string) => void;
 }
@@ -74,8 +77,8 @@ export function ChatView({
   authStatus,
   orchestration,
   attachments,
-  searchLimit,
-  onSearchLimitChange,
+  analysisMode = 'auto',
+  onAnalysisModeChange,
   modelId,
   onModelChange,
   onShowLoginModal,
@@ -85,6 +88,7 @@ export function ChatView({
     sendMessage,
     stop,
     isLoading,
+    chatId,
     activeQueryId,
     handleExecuteSearch,
     handleCancelSearch,
@@ -94,12 +98,10 @@ export function ChatView({
     queryGroups,
     hasZeroResults,
     isSearchRunning,
+    isSynthesisRunning,
     realtimeStatus,
     suggestionChips,
     clearSuggestionChips,
-    // Fase C (IA-04): modo de síntese
-    synthesisMode,
-    setSynthesisMode,
     // P-StatusBar: status da query ativa no DB (done/needs_refinement/processing/etc.)
     queryStatus,
   } = orchestration;
@@ -134,8 +136,16 @@ export function ChatView({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
+  // Scroll instantâneo — usado no auto-scroll ao chegar mensagens novas
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // Scroll suave — usado somente no botão manual "Rolar para baixo"
+  const scrollToBottomSmooth = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, []);
 
   // Scroll automático quando chegam mensagens novas
@@ -177,8 +187,11 @@ export function ChatView({
         return;
       }
       if (!input.trim()) return;
+      // Fase C (segurança): strip do prefixo reservado [SISTEMA] — previne injeção de instruções
+      const safeText = input.replace(/^\[SISTEMA\]/gi, '').trim();
+      if (!safeText) return;
       clearSuggestionChips();
-      sendMessage({ text: input });
+      sendMessage({ text: safeText });
       setInput('');
       attachments.clearChips();
     },
@@ -187,13 +200,65 @@ export function ChatView({
 
   // ── Chips de sugestão rápida ─────────────────────────────────────────────
   const chipsList = useMemo(() => suggestionChips ?? [], [suggestionChips]);
+
+  // Fase 3 (P-UI): jornada unificada de busca — agrega proposals de todas as mensagens
+  const searchJourney = useMemo<SearchAttempt[]>(() => {
+    const result: SearchAttempt[] = [];
+    for (const msg of displayMessages) {
+      if (msg.role !== 'assistant') continue;
+      const parts = (msg.parts ?? []) as any[];
+      for (const part of parts) {
+        if (!isToolOrDynamicToolUIPart(part)) continue;
+        const toolName = getToolOrDynamicToolName(part);
+        if (
+          toolName !== 'propose_search_sol_database' &&
+          toolName !== 'propose_search_global_database'
+        )
+          continue;
+        const { state } = part;
+        if (!['output-available', 'input-available', 'input-streaming'].includes(state)) continue;
+        const output = (part as any).output as Record<string, any> | undefined;
+        const input = (part as any).input as Record<string, any> | undefined;
+        if (toolName === 'propose_search_sol_database') {
+          const queries: string[] | undefined = output?.queries ?? input?.queries;
+          if (!queries?.length) continue;
+          const queryId: string | undefined = output?.query_id;
+          result.push({
+            type: 'sol',
+            toolCallId: part.toolCallId,
+            queryId,
+            queries,
+            isExecuted: queryId ? (executedProposalIds?.has(queryId) ?? false) : false,
+            isRunning: queryId ? (runningSearches?.has(queryId) ?? false) : false,
+          });
+        } else {
+          const query: string | undefined = output?.query ?? input?.query;
+          if (!query) continue;
+          const queryId: string | undefined = output?.query_id;
+          result.push({
+            type: 'global',
+            toolCallId: part.toolCallId,
+            queryId,
+            query,
+            isExecuted: queryId ? (executedProposalIds?.has(queryId) ?? false) : false,
+            isRunning: queryId ? (runningSearches?.has(queryId) ?? false) : false,
+          });
+        }
+      }
+    }
+    return result;
+  }, [displayMessages, executedProposalIds, runningSearches]);
   const handleSuggestionClick = useCallback((text: string) => setInput(text), []);
 
   // ── Navegação no histórico de queries ────────────────────────────────────
   const handleSelectQuery = useCallback((queryId: string) => {
-    document
-      .querySelector(`[data-query-id="${queryId}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const el = document.querySelector(`[data-query-id="${queryId}"]`) as HTMLElement;
+    if (el && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({
+        top: el.offsetTop - 24,
+        behavior: 'smooth',
+      });
+    }
   }, []);
 
   // =========================================================================
@@ -205,11 +270,12 @@ export function ChatView({
         {/* ── Painel principal ── */}
         <ResizablePanel
           panelRef={mainPanelRef}
-          defaultSize="100"
-          minSize="30"
+          defaultSize={100}
+          minSize={30}
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
           style={{ transition: 'flex 380ms cubic-bezier(0.16, 1, 0.3, 1)' }}
         >
-          <div className="relative flex h-full flex-col">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {/* Histórico de queries */}
             {queryGroups.length > 0 && (
               <QueryHistoryBar
@@ -220,8 +286,11 @@ export function ChatView({
             )}
 
             {/* Lista de mensagens */}
-            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto py-6">
-              <div className="mx-auto max-w-3xl space-y-4 px-4">
+            <div
+              ref={scrollContainerRef}
+              className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-6"
+            >
+              <div className="mx-auto max-w-4xl space-y-4 px-4">
                 {displayMessages.map((msg) => (
                   <ChatMessageItem
                     key={msg.id}
@@ -236,6 +305,8 @@ export function ChatView({
                     onCancelSearch={handleCancelSearch}
                     executedProposalIds={executedProposalIds}
                     runningSearches={runningSearches}
+                    chatId={chatId}
+                    searchJourney={searchJourney}
                   />
                 ))}
                 {isLoading && displayMessages.at(-1)?.role !== 'assistant' && <TypingIndicator />}
@@ -243,19 +314,21 @@ export function ChatView({
               </div>
             </div>
 
-            {/* Botão de scroll para baixo */}
-            {showScrollButton && (
-              <button
-                onClick={scrollToBottom}
-                className="group/scroll border-border/30 bg-background/40 hover:bg-background/80 absolute bottom-38 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0 rounded-full border px-3 py-2 shadow-md backdrop-blur-md transition-all duration-300"
-                aria-label="Rolar para o fim"
-              >
-                <ChevronsDown className="text-foreground/60 group-hover/scroll:text-foreground h-4 w-4 shrink-0 transition-colors duration-300" />
-                <span className="text-foreground/80 max-w-0 overflow-hidden text-xs font-medium whitespace-nowrap transition-all duration-300 group-hover/scroll:max-w-[12rem]">
-                  Rolar para o fim
-                </span>
-              </button>
-            )}
+            {/* Botão de scroll para baixo — sempre renderizado, visibilidade via CSS */}
+            <button
+              onClick={scrollToBottomSmooth}
+              className={`group/scroll border-border/30 bg-background/40 hover:bg-background/80 absolute bottom-38 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0 rounded-full border px-3 py-2 shadow-md backdrop-blur-md transition-all duration-300 ${
+                showScrollButton
+                  ? 'translate-y-0 opacity-100'
+                  : 'pointer-events-none translate-y-2 opacity-0'
+              }`}
+              aria-label="Rolar para o fim"
+            >
+              <ChevronsDown className="text-foreground/60 group-hover/scroll:text-foreground h-4 w-4 shrink-0 transition-colors duration-300" />
+              <span className="text-foreground/80 max-w-0 overflow-hidden text-xs font-medium whitespace-nowrap transition-all duration-300 group-hover/scroll:max-w-48">
+                Rolar para o fim
+              </span>
+            </button>
 
             {/* Barra de status global do pipeline — P-StatusBar */}
             <PipelineStatusBar
@@ -263,25 +336,27 @@ export function ChatView({
               articles={articles}
               activeQueryId={activeQueryId}
               queryStatus={queryStatus}
+              isSynthesisRunning={isSynthesisRunning}
+              hasZeroResults={hasZeroResults}
             />
 
             {/* Barra de input */}
-            <ChatInputBar
-              input={input}
-              onInputChange={handleInputChange}
-              onSubmit={handleSubmit}
-              showAbortButton={isLoading}
-              onAbort={stop}
-              suggestionChips={chipsList}
-              onSuggestionClick={handleSuggestionClick}
-              attachments={attachments}
-              searchLimit={searchLimit}
-              onSearchLimitChange={onSearchLimitChange}
-              modelId={modelId}
-              onModelChange={onModelChange}
-              synthesisMode={synthesisMode}
-              onSynthesisModeChange={setSynthesisMode}
-            />
+            <div>
+              <ChatInputBar
+                input={input}
+                onInputChange={handleInputChange}
+                onSubmit={handleSubmit}
+                showAbortButton={isLoading}
+                onAbort={stop}
+                suggestionChips={chipsList}
+                onSuggestionClick={handleSuggestionClick}
+                attachments={attachments}
+                analysisMode={analysisMode}
+                onAnalysisModeChange={onAnalysisModeChange}
+                modelId={modelId}
+                onModelChange={onModelChange}
+              />
+            </div>
           </div>
         </ResizablePanel>
 
@@ -296,6 +371,7 @@ export function ChatView({
               maxSize="65"
               collapsible
               collapsedSize="0"
+              className="flex min-h-0 min-w-0 flex-col overflow-hidden"
               style={{ transition: 'flex 380ms cubic-bezier(0.16, 1, 0.3, 1)' }}
               onResize={(size) => setIsPanelOpen(size.asPercentage > 1)}
             >
@@ -314,14 +390,18 @@ export function ChatView({
         )}
       </ResizablePanelGroup>
 
-      {/* ── Aba lateral para re-abrir o painel do acervo ── */}
-      {!isPanelOpen && hasArticles && (
+      {/* ── Aba lateral para re-abrir o painel do acervo — sempre no DOM quando há artigos, visibilidade via CSS ── */}
+      {hasArticles && (
         <button
           onClick={() => {
             extractionsPanelRef.current?.expand();
             mainPanelRef.current?.resize('58');
           }}
-          className="group/tab border-border/60 bg-background hover:bg-muted hover:border-primary/40 absolute top-1/2 right-0 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-2 rounded-l-xl border border-r-0 px-2.5 py-4 shadow-md transition-all"
+          className={`group/tab border-border/60 bg-background hover:bg-muted hover:border-primary/40 absolute top-1/2 right-0 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-2 rounded-l-xl border border-r-0 px-2.5 py-4 shadow-md transition-all duration-300 ${
+            !isPanelOpen
+              ? 'translate-x-0 opacity-100'
+              : 'pointer-events-none translate-x-4 opacity-0'
+          }`}
           aria-label="Abrir painel do acervo"
         >
           <ChevronLeft className="text-muted-foreground group-hover/tab:text-primary h-3.5 w-3.5 shrink-0 transition-colors" />
@@ -337,7 +417,7 @@ export function ChatView({
         open={attachments.isAttachDialogOpen}
         onOpenChange={attachments.setIsAttachDialogOpen}
       >
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent className="sm:max-w-130">
           <DialogHeader>
             <DialogTitle>Adicionar Referência</DialogTitle>
             <DialogDescription>

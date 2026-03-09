@@ -10,6 +10,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { connection } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { articles, searchQueries } from '@/server/db/schema';
@@ -131,6 +132,9 @@ function articlesToJSON(articleList: Article[], queryTitle: string): object {
 // ---------------------------------------------------------------------------
 
 export async function GET(request: Request) {
+  // Sinaliza ao PPR que esta rota é dinâmica — deve ficar fora do try/catch
+  // para que a rejeição se propague corretamente ao sistema de prerender.
+  await connection();
   try {
     const session = await auth();
     if (!session?.user?.id) {

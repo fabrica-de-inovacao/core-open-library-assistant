@@ -153,7 +153,7 @@
 }
 
 .chat-message-enter {
-  animation: chat-slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: chat-slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Typing dot pulse — each dot fades up and back */

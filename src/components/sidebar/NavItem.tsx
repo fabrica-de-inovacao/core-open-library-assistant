@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { SidebarMenuItem, useSidebar } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { useActiveChat } from '@/contexts/ActiveChatContext';
 
 interface NavItemProps {
   href: string;
@@ -14,13 +15,29 @@ export function NavItem({ href, icon, label, active }: NavItemProps) {
   const { state } = useSidebar();
   const isCollapsed = state === 'collapsed';
 
+  // Tenta usar o ActiveChatContext para guardar a navegação quando há busca em andamento
+  let requestNavigation: ((path: string) => void) | null = null;
+  try {
+    const ctx = useActiveChat(); // eslint-disable-line react-hooks/rules-of-hooks
+    requestNavigation = ctx.requestNavigation;
+  } catch {
+    // Fora do ActiveChatProvider — usa navegação direta via Link
+  }
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (requestNavigation) {
+      e.preventDefault();
+      requestNavigation(href);
+    }
+  };
+
   return (
     <SidebarMenuItem className="group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
-      {/* open={undefined} quando collapsed = Radix gerencia; open={false} quando expanded = nunca mostra */}
       <Tooltip open={isCollapsed ? undefined : false}>
         <TooltipTrigger asChild>
           <Link
             href={href}
+            onClick={handleClick}
             className={cn(
               'group flex h-9 w-full items-center gap-3 rounded px-3 text-[13px]',
               'group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0',

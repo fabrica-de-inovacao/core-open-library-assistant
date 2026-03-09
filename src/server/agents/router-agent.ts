@@ -16,6 +16,7 @@
 
 import { generateText } from 'ai';
 import { getModelForTask, getModelIdForTask } from '@/lib/ai-provider';
+import { logger } from '@/lib/logger';
 
 // ─── Tipos públicos ─────────────────────────────────────────────────────────
 
@@ -238,6 +239,19 @@ CATEGORIAS:
 - "quick_lookup": quer encontrar alguns artigos ou referências sobre um tema de forma pontual, sem precisar de análise densa.
 - "systematic_review": quer uma revisão bibliográfica, mapeamento da literatura, estado da arte, análise sistemática com múltiplos artigos.
 
+EXEMPLOS (few-shot):
+Input: "o que é aprendizado por reforço?"
+{"intent":"conversational","reasoning":"Pergunta definicional pura, sem interesse em busca bibliográfica"}
+
+Input: "me indica alguns papers sobre transfer learning em NLP"
+{"intent":"quick_lookup","reasoning":"Usuário quer alguns artigos pontuais, sem revisão sistemática"}
+
+Input: "faça uma revisão bibliográfica sobre gamificação no ensino superior"
+{"intent":"systematic_review","reasoning":"Pedido explícito de revisão com múltiplos artigos e análise densa"}
+
+Input: "me fala sobre IA na educação" (ambíguo)
+{"intent":"quick_lookup","reasoning":"Input ambíguo sem indicador sistemático — padrão: quick_lookup"}
+
 Retorne APENAS um JSON com dois campos: "intent" (uma das três palavras exatas acima) e "reasoning" (1 frase curta).
 Exemplo: {"intent":"systematic_review","reasoning":"Usuário quer mapear a literatura sobre gamificação"}`,
       prompt: `Input do usuário: "${input.slice(0, 500)}"`,
@@ -259,7 +273,7 @@ Exemplo: {"intent":"systematic_review","reasoning":"Usuário quer mapear a liter
       };
     }
   } catch (err) {
-    console.warn(
+    logger.warn(
       `[RouterAgent] ⚠️ LLM classification failed — defaulting to quick_lookup | model=${getModelIdForTask('reranker')}`,
       err
     );
@@ -311,9 +325,7 @@ export async function runRouterAgent(
   // Camada 1: lexical
   const lexResult = lexicalRoute(input);
   if (lexResult) {
-    console.log(
-      `[RouterAgent] ✅ intent=${lexResult.intent} | confidence=rule | words=${wordCount}`
-    );
+    logger.debug(`[RouterAgent] intent=${lexResult.intent} | confidence=rule | words=${wordCount}`);
     return lexResult;
   }
 
@@ -326,30 +338,28 @@ export async function runRouterAgent(
       reasoning: `Short opinion/rhetorical question (${wordCount} words, ends with ?) — routing to conversational`,
       synthesisDepth: 'brief',
     };
-    console.log(
-      `[RouterAgent] ✅ intent=${result.intent} | confidence=rule (opinion) | words=${wordCount}`
+    logger.debug(
+      `[RouterAgent] intent=${result.intent} | confidence=rule (opinion) | words=${wordCount}`
     );
     return result;
   }
 
-  // Ambíguo: inputs curtos sem marcadores são provavelmente quick_lookup
-  if (wordCount <= 5) {
+  // Ambíguo: inputs muito curtos (≤3 palavras) sem marcadores são provavelmente quick_lookup
+  if (wordCount <= 3) {
     const result: RouteResult = {
       intent: 'quick_lookup',
       confidence: 'rule',
-      reasoning: `Short input (${wordCount} words) — defaulting to quick_lookup`,
+      reasoning: `Short input (${wordCount} words, ≤3) — defaulting to quick_lookup`,
       synthesisDepth: 'standard',
     };
-    console.log(
-      `[RouterAgent] ✅ intent=${result.intent} | confidence=rule (short) | words=${wordCount}`
+    logger.debug(
+      `[RouterAgent] intent=${result.intent} | confidence=rule (short) | words=${wordCount}`
     );
     return result;
   }
 
   // Camada 2: LLM
   const llmResult = await llmRoute(input);
-  console.log(
-    `[RouterAgent] ✅ intent=${llmResult.intent} | confidence=model | words=${wordCount} | reasoning="${llmResult.reasoning}"`
-  );
+  logger.debug(`[RouterAgent] intent=${llmResult.intent} | confidence=model | words=${wordCount}`);
   return llmResult;
 }

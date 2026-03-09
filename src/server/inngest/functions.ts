@@ -328,6 +328,145 @@ export const processSingleArticle = inngest.createFunction(
         });
       }
 
+      // ── STEP 2.5: Semantic Scholar — Grafo de Citações ───────────────────
+      // Fase 6 (P-seguinte): busca referências (backward) e citações (forward)
+      // via Semantic Scholar API (gratuita, sem chave de API).
+      // Armazena JSONB em citation_graph: { references, citations, fetched_at }.
+      // Rate limit sem chave: ~1 req/seg. Concurrency=4 por usuário → até 4 artigos
+      // chegam ao step simultaneamente → jitter largo (0–20s) distribui os requests;
+      // retries usam esperas longas (30s/60s/90s) para evitar burst sincronizado.
+      if (scrapeResult?.doi && process.env.SEMANTIC_SCHOLAR_API_KEY) {
+        await step.run(`semantic-scholar-graph-${article.id}`, async () => {
+          const doi = scrapeResult.doi!;
+          const jitterMs = Math.floor(Math.random() * 20_000); // 0–20s
+          await new Promise((r) => setTimeout(r, jitterMs));
+
+          const ssUrl =
+            `https://api.semanticscholar.org/graph/v1/paper/DOI:${encodeURIComponent(doi)}` +
+            `?fields=references.title,references.externalIds,citations.title,citations.externalIds,citations.contexts,citations.intents,tldr,authors,authors.hIndex,authors.citationCount`;
+
+          const MAX_RETRIES = 3;
+          // Waits mais curtos pois usamos API Key, 429 agora é raro e dura poucos segundos
+          const RETRY_WAITS_MS = [2_000, 5_000, 10_000];
+          let response: Response | null = null;
+
+          for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+              const headers: Record<string, string> = {
+                'User-Agent': 'SOLAssistant/1.0 (mailto:dev@example.com)',
+              };
+              if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
+                headers['x-api-key'] = process.env.SEMANTIC_SCHOLAR_API_KEY;
+              }
+
+              response = await fetchWithTimeout(ssUrl, { headers }, 12_000);
+            } catch (fetchErr) {
+              if (attempt === MAX_RETRIES) throw fetchErr;
+              await new Promise((r) => setTimeout(r, RETRY_WAITS_MS[attempt - 1]));
+              continue;
+            }
+
+            if (response.status === 429) {
+              // Respeita Retry-After se presente; senão usa esperas fixas longas
+              const retryAfter = response.headers.get('Retry-After');
+              const waitMs = retryAfter
+                ? parseInt(retryAfter, 10) * 1000
+                : RETRY_WAITS_MS[attempt - 1]; // 30s, 60s, 90s
+              logger.warn(
+                `[Inngest] ⚠️ SemanticScholar 429 | doi=${doi} | tentativa=${attempt}/${MAX_RETRIES} | wait=${waitMs}ms`
+              );
+              if (attempt < MAX_RETRIES) {
+                await new Promise((r) => setTimeout(r, waitMs));
+                continue;
+              }
+              // Esgotou retries — falha silenciosa (não bloqueia o artigo)
+              logger.warn(
+                `[Inngest] ⚠️ SemanticScholar 429 esgotou retries | doi=${doi} | article=${article.id}`
+              );
+              return;
+            }
+
+            if (!response.ok) {
+              logger.warn(
+                `[Inngest] ⚠️ SemanticScholar HTTP ${response.status} | doi=${doi} | article=${article.id}`
+              );
+              return;
+            }
+
+            // Sucesso — sai do loop de retry
+            break;
+          }
+
+          if (!response?.ok) return;
+
+          try {
+            const data = (await response.json()) as {
+              references?: { title?: string; externalIds?: { DOI?: string } }[];
+              citations?: {
+                title?: string;
+                externalIds?: { DOI?: string };
+                contexts?: string[];
+                intents?: string[];
+              }[];
+              tldr?: { text?: string };
+              authors?: { name?: string; hIndex?: number; citationCount?: number }[];
+            };
+            const mapReference = (p: { title?: string; externalIds?: { DOI?: string } }) => ({
+              title: p.title ?? null,
+              doi: p.externalIds?.DOI ?? null,
+            });
+            const mapCitation = (p: {
+              title?: string;
+              externalIds?: { DOI?: string };
+              contexts?: string[];
+              intents?: string[];
+            }) => ({
+              title: p.title ?? null,
+              doi: p.externalIds?.DOI ?? null,
+              ...(p.contexts && p.contexts.length > 0 ? { contexts: p.contexts } : {}),
+              ...(p.intents && p.intents.length > 0 ? { intents: p.intents } : {}),
+            });
+            const citationGraph = {
+              references: (data.references ?? []).map(mapReference),
+              citations: (data.citations ?? []).map(mapCitation),
+              fetched_at: new Date().toISOString(),
+            };
+
+            const tldrText = data.tldr?.text?.trim() || undefined;
+
+            const authorsStr =
+              data.authors
+                ?.map((a) => {
+                  const parts = [a.name];
+                  if (a.hIndex !== undefined) parts.push(`h-index: ${a.hIndex}`);
+                  if (a.citationCount !== undefined) parts.push(`citations: ${a.citationCount}`);
+                  if (parts.length > 1) {
+                    return `${parts[0]} (${parts.slice(1).join(', ')})`;
+                  }
+                  return parts[0] || 'Unknown';
+                })
+                .join(', ') || undefined;
+
+            await db
+              .update(articles)
+              .set({
+                citationGraph,
+                ...(tldrText ? { tldrContent: tldrText } : {}),
+                ...(authorsStr ? { authors: authorsStr } : {}),
+              })
+              .where(eq(articles.id, article.id));
+
+            logger.log(
+              `[Inngest] 📚 SemanticScholar OK | refs=${citationGraph.references.length} | cites=${citationGraph.citations.length} | tldr=${!!tldrText} | article=${article.id}`
+            );
+          } catch (err) {
+            logger.warn(
+              `[Inngest] ⚠️ SemanticScholar parse falhou | article=${article.id}: ${(err as Error).message}`
+            );
+          }
+        });
+      }
+
       // Fase 3 (P-19): worker PyMuPDF é sempre chamado para artigos SOL.
       // O corpus SOL é LaTeX Type1/Type3 — PyMuPDF extrai 30k+ chars corretamente.
       // abstract_only é setado pelo próprio worker quando PyMuPDF + OCR falham
@@ -447,47 +586,145 @@ export const processSingleArticle = inngest.createFunction(
               12_000
             );
 
-            if (!res.ok) return md;
+            type CrossRefBest = {
+              score?: number;
+              DOI?: string;
+              title?: string[];
+              author?: Array<{ given?: string; family?: string }>;
+              'published-print'?: { 'date-parts'?: number[][] };
+              'published-online'?: { 'date-parts'?: number[][] };
+              abstract?: string;
+              keyword?: string[];
+              subject?: string[];
+              publisher?: string;
+              'container-title'?: string[];
+              license?: unknown[];
+            };
+            let best: CrossRefBest | null = null;
+            if (res.ok) {
+              const raw = (await res.json()) as unknown;
+              const parseResult = CrossRefSearchResponseSchema.safeParse(raw);
+              if (parseResult.success) {
+                best = parseResult.data.message?.items?.[0] as CrossRefBest;
+              }
+            }
 
-            const raw = (await res.json()) as unknown;
-            const parseResult = CrossRefSearchResponseSchema.safeParse(raw);
-            if (!parseResult.success) return md;
+            let doi: string | null = null;
+            let finalTitle: string = inferredTitle;
+            let finalAuthors: string | null = parsed.authors ?? null;
+            let finalYear: number | null = null;
+            let finalAbstract: string | null = null;
+            let finalKeywords: string | null = null;
+            let finalPublisher: string | null = null;
+            let finalSourceName: string | null = null;
+            let finalIsOpenAccess = false;
+            let finalMetadataSource = 'scraper';
+            let finalTldrText: string | null = null;
 
-            const best = parseResult.data.message?.items?.[0];
-            if (!best || (best.score ?? 0) < 50) return md;
+            if (best && (best.score ?? 0) >= 50) {
+              doi = best.DOI ?? null;
+              finalTitle = best.title?.[0] ?? inferredTitle;
+              finalAuthors =
+                best.author?.map((a) => [a.given, a.family].filter(Boolean).join(' ')).join(', ') ??
+                parsed.authors ??
+                null;
+              const dateArr =
+                best['published-print']?.['date-parts']?.[0] ??
+                best['published-online']?.['date-parts']?.[0];
+              finalYear = dateArr?.[0] ?? null;
+              finalAbstract = best.abstract?.replace(/<\/?jats:[^>]+>/g, '').trim() ?? null;
+              finalKeywords = [...(best.keyword ?? []), ...(best.subject ?? [])].join(', ') || null;
+              finalPublisher = best.publisher ?? null;
+              finalSourceName = best['container-title']?.[0] ?? null;
+              finalIsOpenAccess = (best.license?.length ?? 0) > 0;
+              finalMetadataSource = 'crossref';
+            } else if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
+              // Fallback: Busca via Semantic Scholar Paper Search API
+              const s2Url = new URL('https://api.semanticscholar.org/graph/v1/paper/search');
+              s2Url.searchParams.set('query', inferredTitle);
+              s2Url.searchParams.set(
+                'fields',
+                'title,authors,year,externalIds,abstract,isOpenAccess,venue,tldr,authors.hIndex,authors.citationCount'
+              );
+              s2Url.searchParams.set('limit', '3');
 
-            const doi = best.DOI ?? null;
-            const title = best.title?.[0] ?? inferredTitle;
-            const authors =
-              best.author?.map((a) => [a.given, a.family].filter(Boolean).join(' ')).join(', ') ??
-              parsed.authors ??
-              null;
-            const dateArr =
-              best['published-print']?.['date-parts']?.[0] ??
-              best['published-online']?.['date-parts']?.[0];
-            const year = dateArr?.[0] ?? null;
-            const abstract = best.abstract?.replace(/<\/?jats:[^>]+>/g, '').trim() ?? null;
-            const keywords = [...(best.keyword ?? []), ...(best.subject ?? [])].join(', ') || null;
+              const headers: Record<string, string> = { 'User-Agent': 'SOLAssistant/1.0' };
+              if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
+                headers['x-api-key'] = process.env.SEMANTIC_SCHOLAR_API_KEY;
+              }
+
+              try {
+                const s2Res = await fetchWithTimeout(s2Url.toString(), { headers }, 12_000);
+                if (s2Res.ok) {
+                  type S2Author = { name?: string; hIndex?: number; citationCount?: number };
+                  type S2Paper = {
+                    title?: string;
+                    year?: number;
+                    externalIds?: { DOI?: string };
+                    abstract?: string;
+                    venue?: string;
+                    isOpenAccess?: boolean;
+                    tldr?: { text?: string };
+                    authors?: S2Author[];
+                  };
+                  const s2Data = (await s2Res.json()) as { data?: S2Paper[] };
+                  const s2Best = s2Data.data?.[0];
+
+                  if (s2Best?.title) {
+                    doi = s2Best.externalIds?.DOI ?? null;
+                    finalTitle = s2Best.title;
+                    finalAuthors =
+                      s2Best.authors
+                        ?.map((a: S2Author) => {
+                          const parts = [a.name];
+                          if (a.hIndex !== undefined) parts.push(`h-index: ${a.hIndex}`);
+                          if (a.citationCount !== undefined)
+                            parts.push(`citations: ${a.citationCount}`);
+                          if (parts.length > 1) {
+                            return `${parts[0]} (${parts.slice(1).join(', ')})`;
+                          }
+                          return parts[0] || 'Unknown';
+                        })
+                        .join(', ') ??
+                      parsed.authors ??
+                      null;
+                    finalYear = s2Best.year ?? null;
+                    finalAbstract = s2Best.abstract ?? null;
+                    finalSourceName = s2Best.venue ?? null;
+                    finalIsOpenAccess = s2Best.isOpenAccess ?? false;
+                    finalTldrText = s2Best.tldr?.text ?? null;
+                    finalMetadataSource = 'semantic_scholar';
+                  } else {
+                    return md;
+                  }
+                } else {
+                  return md;
+                }
+              } catch {
+                return md;
+              }
+            }
 
             await db
               .update(articles)
               .set({
-                title,
+                title: finalTitle,
                 ...(doi ? { doi } : {}),
-                ...(authors ? { authors } : {}),
-                ...(year ? { publicationYear: year } : {}),
-                ...(best.publisher ? { publisher: best.publisher } : {}),
-                ...(best['container-title']?.[0] ? { sourceName: best['container-title'][0] } : {}),
-                ...(abstract ? { abstract } : {}),
-                ...(keywords ? { keywords } : {}),
-                isOpenAccess: (best.license?.length ?? 0) > 0,
-                metadataSource: 'crossref',
+                ...(finalAuthors ? { authors: finalAuthors } : {}),
+                ...(finalYear ? { publicationYear: finalYear } : {}),
+                ...(finalPublisher ? { publisher: finalPublisher } : {}),
+                ...(finalSourceName ? { sourceName: finalSourceName } : {}),
+                ...(finalAbstract ? { abstract: finalAbstract } : {}),
+                ...(finalKeywords ? { keywords: finalKeywords } : {}),
+                ...(finalTldrText ? { tldrContent: finalTldrText } : {}),
+                isOpenAccess: finalIsOpenAccess,
+                metadataSource: finalMetadataSource,
               })
               .where(eq(articles.id, article.id));
 
             // Enriquece o contexto do TL;DR com o abstract real encontrado
-            if (abstract) {
-              md = `# ${title}\n\n**Resumo:** ${abstract}\n\n---\n\n` + md;
+            if (finalAbstract) {
+              md = `# ${finalTitle}\n\n**Resumo:** ${finalAbstract}\n\n---\n\n` + md;
             }
           } catch (err) {
             logger.warn(
@@ -503,9 +740,19 @@ export const processSingleArticle = inngest.createFunction(
       // ── STEP 5: Gerar TL;DR ───────────────────────────────────────────────
       const tldr = await step.run(`generate-tldr-${article.id}`, async () => {
         const [enriched] = await db
-          .select({ keywords: articles.keywords, abstract: articles.abstract })
+          .select({
+            keywords: articles.keywords,
+            abstract: articles.abstract,
+            tldrContent: articles.tldrContent,
+          })
           .from(articles)
           .where(eq(articles.id, article.id));
+
+        // Fase 1: S2 TL;DR Native Integration
+        if (enriched?.tldrContent && enriched.tldrContent.length > 10) {
+          logger.log(`[Inngest] ⚡ TL;DR nativo via Semantic Scholar | article=${article.id}`);
+          return enriched.tldrContent;
+        }
 
         const contextPrefix = [
           enriched?.keywords ? `Palavras-chave oficiais: ${enriched.keywords}` : '',
@@ -522,7 +769,8 @@ export const processSingleArticle = inngest.createFunction(
 \uD83D\uDD0D Problema: [qual problema o artigo endereça, em 1 frase]
 \uD83D\uDEE0 Método: [abordagem ou metodologia principal, em 1 frase]
 ✅ Resultado: [principal conclusão ou contribuição, em 1 frase]
-REGRAS: Máximo 600 caracteres. Obrigatoriamente em ${tldrLangLabel}. Sem texto fora do template.`,
+REGRAS: Máximo 600 caracteres. Obrigatoriamente em ${tldrLangLabel}. Sem texto fora do template.
+FALLBACK: Se o conteúdo do artigo fornecido for fragmentado, corrompido ou ilegível (ex: PDF escaneado), baseie-se apenas no campo "Resumo do autor" fornecido acima. Se ambos forem indisponíveis, indique "Não foi possível gerar síntese" no campo Resultado.`,
             prompt: `${contextPrefix ? contextPrefix + '\n\n' : ''}Gere a síntese:\n\n${markdownContent.substring(0, 30000)}`,
           });
           logger.log(`[Inngest] ✅ TL;DR OK | ${text.length} chars | article=${article.id}`);
@@ -542,6 +790,9 @@ REGRAS: Máximo 600 caracteres. Obrigatoriamente em ${tldrLangLabel}. Sem texto 
           const { embedding } = await embed({
             model: getEmbeddingModel(),
             value: text.slice(0, 2000),
+            // gemini-embedding-001 usa MRL (padrão 3072 dims) — truncamos para 768
+            // para ser compatível com a coluna vector(768) no Supabase.
+            providerOptions: { google: { outputDimensionality: 768 } },
           });
           await db
             .update(articles)

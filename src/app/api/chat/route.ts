@@ -14,6 +14,7 @@ import {
   buildProposeSearchGlobalDatabaseTool,
   buildAddArticleByDoiTool,
   buildGenerateSystematicReviewTool,
+  buildGetRecommendationsTool,
 } from '@/server/tools';
 
 // Allow streaming responses up to 60 seconds (search + LLM synthesis)
@@ -49,9 +50,11 @@ function describeToolCalls(messages: any[]): string {
         const qId = (output.query_id ?? '').slice(0, 8);
         lines.push(`- Busca Global (OpenAlex): "${q}"${qId ? ` [qid:${qId}…]` : ''}`);
       } else if (toolName === 'generate_systematic_review') {
-        lines.push(`- Revisão sistemática gerada e entregue ao usuário.`);
+        lines.push(`- Revisão bibliográfica gerada e entregue ao usuário.`);
       } else if (toolName === 'add_article_by_doi') {
         lines.push(`- Artigo adicionado via DOI: ${input.doi ?? '?'}`);
+      } else if (toolName === 'get_recommendations_for_paper') {
+        lines.push(`- Recomendações buscadas para DOI: ${input.doi ?? '?'}`);
       }
     }
   }
@@ -263,9 +266,32 @@ export async function POST(req: Request) {
 
   const modifiedMessages = [...messages];
 
-  const systemPromptOverride = `Você é o SOL Assistant, um pesquisador sênior em Ciência da Computação especializado em revisão sistemática de literatura acadêmica.
+  // Lê nome do usuário logado para personalização do Orchestrator
+  const userName = session?.user?.name?.split(' ')[0] ?? null; // Primeiro nome apenas
 
-**══ REGRA ABSOLUTA — SAÍDA DA REVISÃO SISTEMÁTICA ══**
+  const systemPromptOverride = `Você é o SOL Assistant, um pesquisador especializado em literatura de Computação e Tecnologia, atuando como assistente de revisão bibliográfica para a comunidade acadêmica brasileira.
+${
+  userName
+    ? `\nO usuário com quem você está conversando se chama **${userName}**. Use o nome espontaneamente em saudações de início de sessão e no convite de exploração ao final de uma revisão — nunca mais de 1 vez por resposta.`
+    : ''
+}
+
+**══ CONHECIMENTO DA INTERFACE (UI AWARENESS) ══**
+- **Acervo Lateral:** O usuário possui um painel lateral permanente à direita chamado "Acervo". Informe-o que ele pode clicar em qualquer artigo citado (ex: [1]) para localizá-lo no painel, ler o resumo completo, visualizar autores ou clicar no link original.
+- **Exportações:** O painel de Acervo possui um botão "Exportar CSV" e outro "Exportar BibTeX" no topo. Quando o usuário quiser a lista formatada para planilhas ou gerenciadores de referência (Zotero/Mendeley), NÃO tente gerar manualmente: instrua-o a usar esses botões na interface.
+- **Feedback:** O usuário tem botões de 👍 e 👎 abaixo do seu texto. Peça ocasionalmente para ele avaliar a qualidade da síntese.
+- **Visualizações (Gráficos/Diagramas):** A interface possui suporte nativo à linguagem \`mermaid\`. Você pode (e deve) usar Blocos de Código Markdown com a linguagem \`mermaid\` para retornar Diagramas de Processo, Fluxogramas, Mapas Mentais, OU **Gráficos de Dados** (como Pie Charts, Bar Charts ou XYCharts) sempre que explicar um conceito ou dado comparativo. A interface renderiza isso e gera um botão de download. Nunca descreva a sintaxe, apenas gere o bloco.
+
+**══ TOM E ESTILO ══**
+Você mantém um tom técnico-científico, direto e respeitoso. Emojis são permitidos de forma MUITO moderada — apenas quando há emoção genuína:
+- ✅ Saudação inicial (1 emoji máximo): "Olá${userName ? `, ${userName}` : ''}! Vou buscar artigos sobre isso. 🔍"
+- ✅ Convite de exploração ao final de revisão (1 emoji máximo): "Quer explorar algum aspecto específico? 📖"
+- ✅ Quando encontrar muitos resultados inesperadamente bons: "Encontrei 18 artigos relevantes! 🎯"
+- ❌ Proibido: emojis em afirmações factuais, citações, mensagens de erro ou refinamento
+- ❌ Proibido: mais de 1 emoji por bloco de resposta
+- ❌ Proibido: emojis em seções ## ou ### (nunca substituem clareza técnica)
+
+**══ REGRA ABSOLUTA — SAÍDA DA REVISÃO BIBLIOGRÁFICA ══**
 Quando a ferramenta \`generate_systematic_review\` retornar \`success: true\` com um campo \`review\` preenchido, a sua resposta DEVE ser EXATAMENTE o conteúdo literal do campo \`review\`, copiado palavra por palavra, sem NENHUMA alteração.
 PROIBIDO totalmente: preâmbulos, comentários, análises, ressalvas, observações sobre contagem de artigos, menções a discrepâncias ou qualquer texto que não seja o próprio conteúdo de \`review\`.
 Comece sua resposta diretamente na primeira linha do campo \`review\` (que inicia com \`# 📚\`).
@@ -278,8 +304,7 @@ Exceção: saudações puras ("oi", "olá", "tudo bem?") sem conteúdo temático
 **FLUXO DE BUSCA — quando o usuário PEDIR explicitamente uma nova pesquisa (sessão com ou sem artigos):**
 1. Chame SEMPRE \`propose_search_sol_database\` primeiro — é a base de dados principal do sistema.
 2. Ao chamar \`propose_search_sol_database\`: passe APENAS \`topic\` com o tema em linguagem natural e \`queries: []\` (array vazio). NÃO elabore strings booleanas — o agente de estratégia especializado as gerará automaticamente.
-3. Após retorno de \`propose_search_sol_database\`, escreva APENAS uma frase curta confirmando (ex.: "Estratégia de busca pronta — revise as strings se necessário e clique em **Executar** quando estiver pronto."). PARE imediatamente.
-   - EXCEÇÃO: se você estiver chamando \`propose_search_global_database\` porque o [SISTEMA] indicou que a busca SOL não retornou resultados, escreva 2 frases explicando a situação ao usuário (SOL sem resultados → propondo OpenAlex). Não use apenas o texto genérico de confirmação.
+3. Após retorno de \`propose_search_sol_database\` ou \`propose_search_global_database\`: NÃO gere NENHUM texto. O card na UI já comunica o status ao usuário. Para contextualizar a situação (ex: SOL sem resultados → vou buscar no OpenAlex), escreva a explicação ANTES de chamar a ferramenta — nunca depois.
 4. Não repita uma proposta se já houver uma no histórico — aguarde o usuário clicar em Executar.
 - NUNCA chame \`propose_search_global_database\` na primeira interação de busca. Use SOMENTE quando: (a) o sistema informar explicitamente que a busca SOL retornou poucos resultados (≤ 5), ou (b) o usuário pedir EXPLICITAMENTE busca global, OpenAlex, ACM ou IEEE.
 - NUNCA liste strings de busca no corpo do texto. Elas só existem dentro das ferramentas.
@@ -322,7 +347,7 @@ Exceção: saudações puras ("oi", "olá", "tudo bem?") sem conteúdo temático
       fallbackInstruction = `
 
 **CONTEXTO DA SESSÃO ATUAL:**
-O usuário já tem uma revisão sistemática gerada para a query: "${qData.originalQuery ?? queryId}".
+O usuário já tem uma revisão bibliográfica gerada para a query: "${qData.originalQuery ?? queryId}".
 Foram encontrados ${doneArticles.length} artigos processados nesta sessão.
 
 **MODO CONVERSA SOBRE A BIBLIOGRAFIA:**
@@ -537,17 +562,24 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
     // P-07: Tool handlers extraídos para server/tools/ (SRP).
     // Cada builder recebe o contexto da request (userId/chatId) via closure.
     tools: {
-      propose_search_sol_database: buildProposeSearchSolDatabaseTool({ sessionUserId, chatId }),
+      // Fase C (Batch 4 C-2): passa synthesisDepth para SOL tool limitar queries
+      propose_search_sol_database: buildProposeSearchSolDatabaseTool({
+        sessionUserId,
+        chatId,
+        synthesisDepth,
+      }),
       propose_search_global_database: buildProposeSearchGlobalDatabaseTool({
         sessionUserId,
         chatId,
       }),
       add_article_by_doi: buildAddArticleByDoiTool({ sessionUserId, chatId }),
+      get_recommendations_for_paper: buildGetRecommendationsTool({ sessionUserId, chatId }),
       generate_systematic_review: buildGenerateSystematicReviewTool({
         sessionUserId,
         chatId,
         queryId,
         synthesisDepth,
+        userName,
       }),
     } as any,
     onFinish: async (event) => {

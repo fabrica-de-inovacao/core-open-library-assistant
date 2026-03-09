@@ -46,7 +46,10 @@ export function TrendingTopics({ topics, isLoading, onSelect }: TrendingTopicsPr
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-[220px] text-center text-xs">
             Sugestões baseadas nos tópicos em alta de Ciência da Computação no OpenAlex e nas
-            pesquisas mais recorrentes dos usuários da SOL.
+            <div className="text-foreground/50 flex items-center gap-2 text-sm">
+              <TrendingUp className="h-4 w-4" />
+              <span>pesquisas mais recorrentes dos usuários da C.O.R.E..</span>
+            </div>
           </TooltipContent>
         </Tooltip>
       </div>

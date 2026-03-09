@@ -55,8 +55,11 @@ export const ExtractionsPanel = React.memo(
       return () => clearTimeout(t);
     }, [activeQueryId]);
 
-    const totalPages = Math.ceil(articles.length / PAGE_SIZE);
-    const paginatedArticles = articles.slice(
+    // BUG-04: filtra artigos com status terminal 'failed' para não poluir o painel
+    const visibleArticles = articles.filter((a) => a.status !== 'failed');
+
+    const totalPages = Math.ceil(visibleArticles.length / PAGE_SIZE);
+    const paginatedArticles = visibleArticles.slice(
       (currentPage - 1) * PAGE_SIZE,
       currentPage * PAGE_SIZE
     );
@@ -94,7 +97,7 @@ export const ExtractionsPanel = React.memo(
     const isProcessingComplete = articles.length > 0 && doneCount >= articles.length;
 
     return (
-      <div className="bg-background flex h-full flex-col">
+      <div className="bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/* Header */}
         <div className="border-border flex shrink-0 flex-col border-b">
           <div className="flex items-center justify-between gap-3 px-4 py-3">

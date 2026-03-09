@@ -25,6 +25,7 @@ import { RecentChatItem, RecentChatsSkeleton } from '@/components/sidebar/Recent
 import { SidebarExpandButton } from '@/components/sidebar/SidebarExpandButton';
 import { UserMenuPopover } from '@/components/sidebar/UserMenuPopover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useActiveChat } from '@/contexts/ActiveChatContext';
 
 export function AppSidebar() {
   const pathname = usePathname();
@@ -34,6 +35,9 @@ export function AppSidebar() {
 
   const { chats, isLoading, rename, remove } = useRecentChats(session?.user?.id, pathname);
   const [shareDialogChatId, setShareDialogChatId] = useState<string | null>(null);
+
+  // UX-01: guard do "Nova Sessão" — intercepta navegação quando um chat está em andamento
+  const { requestNavigation } = useActiveChat();
 
   const handleDelete = async (chatId: string) => {
     if (isActive(pathname, `/workspace/chat/${chatId}`)) router.push('/workspace');
@@ -58,7 +62,7 @@ export function AppSidebar() {
             </Link>
             <div className="flex min-w-0 flex-1 flex-col leading-none group-data-[collapsible=icon]:hidden">
               <span className="text-sidebar-foreground truncate text-[13px] font-semibold tracking-tight">
-                SOL O.L.A
+                C.O.R.E. AI
               </span>
               <span className="text-sidebar-foreground/35 font-mono text-[8px] tracking-[0.15em] uppercase">
                 SCBC · 2026
@@ -94,6 +98,12 @@ export function AppSidebar() {
                 <TooltipTrigger asChild>
                   <Link
                     href="/workspace"
+                    onClick={(e) => {
+                      if (requestNavigation) {
+                        e.preventDefault();
+                        requestNavigation('/workspace');
+                      }
+                    }}
                     className={cn(
                       'flex h-9 w-full items-center justify-center gap-2 rounded-md',
                       'bg-background/70 border-border/50 text-sidebar-foreground/70 border text-[13px] font-medium',

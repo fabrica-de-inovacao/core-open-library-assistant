@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { connection } from 'next/server';
 import { eq, inArray, and, sql } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
@@ -34,70 +35,95 @@ const OPENALEX_SELECT =
 
 const USER_AGENT = 'SOLAssistant/1.0 (mailto:dev@solassistant.app)';
 
-// ID do campo Computer Science no OpenAlex: https://api.openalex.org/fields/17
+// ID do campo Computer Science no OpenAlex (usado apenas como filtro supplementar opcional).
+// NOTA: não aplicar como filtro obrigatório — pesquisas interdisciplinares (inclusão digital,
+// gênero em STEAM, educação) são indexadas sob campos como Education (22), Sociology (10), etc.
 const CS_FIELD_ID = '17';
 
-// IDs dos publishers no OpenAlex — verificar em https://api.openalex.org/publishers?search=<nome>
-// ACM  (Association for Computing Machinery):        P4310319798  → 164 k works
-// IEEE (Institute of Electrical and Electronics):    P4310319808  → 1,47 M works
-//       (cobre todas as IEEE societies via lineage, ex: IEEE Computer Society P4310320439)
-// Springer Nature (grupo pai):                       P4310319965  → 2,75 M works
-//       (cobre Springer Nature Netherlands P4310320108 via lineage)
-const PUBLISHER_FILTER =
-  'primary_location.source.host_organization_lineage:P4310319798|P4310319808|P4310319965';
+// PUBLISHER FILTER REMOVIDO INTENCIONALMENTE.
+// O filtro ACM|IEEE|Springer excluía venues brasileiras relevantes (SBC, CBIE, WIE, RBIE, SBSC)
+// e restringia pesquisas interdisciplinares. O OpenAlex já cobre essas publicações diretamente.
+// Controle de qualidade é feito pelo RelevanceGate no Inngest e pelo RerankerAgent.
 
 /**
  * Normaliza a query antes de enviar ao OpenAlex.
- * Principal problema: o LLM às vezes gera `""Termo""` (double-double-quotes)
- * que o OpenAlex não entende — converte para `"Termo"`.
+ * Casos cobertos:
+ *   - `""Termo""` (double-double-quotes nos dois lados) → `"Termo"`
+ *   - `""Termo"` (aspas duplas apenas no início)          → `"Termo"`
  */
 function normalizeOpenAlexQuery(raw: string): string {
-  return raw.replace(/""([^"]+)""/g, '"$1"').trim();
+  return raw
+    .replace(/""([^"]+)""/g, '"$1"') // ""term"" → "term"
+    .replace(/^""/, '"') // leading "" → "  (ex: ""Mermãs Digitais")
+    .trim();
 }
 
 /**
- * Gera uma query de fallback removendo termos próprios com caracteres não-ASCII
- * (ex: "Mermãs Digitais", "Sereias Digitais") que dificilmente aparecem
- * na literatura acadêmica indexada pelo OpenAlex.
- * Mantém apenas os termos conceituais em inglês.
+ * Gera uma query de fallback removendo termos com caracteres não-ASCII
+ * (ex: "Mermãs Digitais") para ampliar o alcance quando a busca pelo nome
+ * próprio não retornou resultados. Mantém apenas os termos conceituais.
  */
 function buildFallbackQuery(query: string): string | null {
-  // Só vale a pena se a query tem operadores booleanos
+  // Só vale a pena se a query contém caracteres não-ASCII
+  const hasNonAscii = /[^\x00-\x7F]/.test(query);
+  if (!hasNonAscii) return null;
+
   const hasBoolean = /\b(AND|OR|NOT)\b/.test(query);
-  if (!hasBoolean) return null;
+  let stripped: string;
 
-  // Remove termos entre aspas que contêm caracteres não-ASCII (nomes próprios em Pt-BR)
-  let stripped = query.replace(/"[^"]*[^\x00-\x7F][^"]*"(\s+(AND|OR)\s*)?/gi, '');
+  if (hasBoolean) {
+    // Remove termos entre aspas que contêm caracteres não-ASCII (nomes próprios em Pt-BR)
+    stripped = query.replace(/"[^"]*[^\x00-\x7F][^"]*"(\s+(AND|OR)\s*)?/gi, '');
 
-  // Limpa operadores booleanos órfãos no início/fim
-  stripped = stripped
-    .replace(/^\s*(AND|OR)\s+/i, '')
-    .replace(/\s+(AND|OR)\s*$/i, '')
-    .replace(/\(\s*\)/g, '') // parênteses vazios
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+    // Limpa operadores booleanos órfãos no início/fim
+    stripped = stripped
+      .replace(/^\s*(AND|OR)\s+/i, '')
+      .replace(/\s+(AND|OR)\s*$/i, '')
+      .replace(/\(\s*\)/g, '') // parênteses vazios
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  } else {
+    // Consulta simples: remove palavras que contenham caracteres não-ASCII
+    // (ex: "diagnóstico" → removido; "machine learning" → mantido)
+    stripped = query
+      .replace(/\S*[^\x00-\x7F]\S*/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
 
   return stripped && stripped !== query && stripped.length > 3 ? stripped : null;
 }
 
-/** Executa uma requisição ao OpenAlex e retorna os artigos mapeados. */
+/**
+ * Detecta se a query contém um nome próprio (termo entre aspas) para escolher
+ * a estratégia de busca mais precisa.
+ * Retorna o nome próprio se encontrado, ou null.
+ */
+function extractProperName(query: string): string | null {
+  const match = query.match(/"([^"]+)"/);
+  return match ? match[1] : null;
+}
+
+/** Executa uma requisição ao OpenAlex via search= e retorna os artigos mapeados. */
 async function doOpenAlexFetch(
   query: string,
-  filterCS: boolean,
+  extraFilters: string[], // filtros adicionais além de type:article (pode ser [])
   attempt: number,
   perPage: number = 25
 ): Promise<{ articles: MappedArticle[]; totalCount: number }> {
-  const filters: string[] = ['type:article', PUBLISHER_FILTER];
-  if (filterCS) filters.push(`topics.field.id:${CS_FIELD_ID}`);
+  const filters: string[] = ['type:article', ...extraFilters];
 
+  const filterStr = filters.length > 0 ? `&filter=${filters.join(',')}` : '';
   const url =
     `https://api.openalex.org/works` +
     `?search=${encodeURIComponent(query)}` +
-    `&filter=${filters.join(',')}` +
+    filterStr +
     `&per-page=${perPage}` +
     `&select=${OPENALEX_SELECT}`;
 
-  logger.log(`[GlobalSearch] 🌐 OpenAlex tentativa ${attempt} | CS=${filterCS} | ${url}`);
+  logger.debug(
+    `[GlobalSearch] 🌐 OpenAlex tentativa ${attempt} | filters=[${filters.join(',')}] | query="${query.slice(0, 60)}"`
+  );
 
   const response = await fetch(url, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
@@ -117,11 +143,11 @@ async function doOpenAlexFetch(
 
   const data = parsed.data;
   const totalCount = data.meta?.count ?? 0;
-  logger.log(
+  logger.info(
     `[GlobalSearch] ✅ Tentativa ${attempt}: ${data.results?.length ?? 0} / ${totalCount} resultados`
   );
 
-  const articles = data.results.map((work): MappedArticle => {
+  const articles = (data.results ?? []).map((work): MappedArticle => {
     const authors =
       work.authorships
         .map((a) => a.author.display_name)
@@ -160,39 +186,62 @@ async function doOpenAlexFetch(
 }
 
 /**
- * Busca artigos no OpenAlex com estratégia de 3 tentativas progressivas:
- * 1. Query normalizada + filtro Computer Science (mais preciso)
- * 2. Query normalizada sem filtro de área (mais abrangente)
- * 3. Query de fallback (sem nomes próprios não-ASCII) + filtro CS
+ * Busca artigos no OpenAlex com estratégia de até 4 tentativas progressivas.
  *
- * Isso resolve o problema de queries como `"Mermãs Digitais" AND (...)` que
- * retornam 0 resultados porque o nome próprio não existe na literatura indexada.
+ * Problemas resolvidos:
+ *   - Removído o publisher filter (ACM|IEEE|Springer) que excluía venues brasileiras
+ *     (SBC, CBIE, WIE, RBIE) e pesquisas interdisciplinares.
+ *   - Removído o mandatory CS field filter — temas interdisciplinares (gênero, educação,
+ *     política pública) estavam completamente invisiíveis.
+ *   - Para nomes próprios de projetos (ex: "Mermãs Digitais"), adiciona tentativa de
+ *     busca exata por título via filter=title.search: (mais preciso que search=).
+ *   - Fallback conceitual em inglês para ampliar cobertura internacional.
+ *
+ * Estratégia:
+ *   1. search=cleanQuery, sem filtros extras        (máximo recall)
+ *   2. Se tem nome próprio: filter=title.search:   (match exato no título)
+ *   3. fallbackQuery sem filtros                    (conceitos sem nome próprio)
+ *   4. fallbackQuery + CS field filter              (narrowing para área de TI)
  */
 async function fetchOpenAlexWorks(
   query: string,
   articleLimit: number = 25
 ): Promise<MappedArticle[]> {
   const cleanQuery = normalizeOpenAlexQuery(query);
-  logger.log(`[GlobalSearch] Query normalizada: "${cleanQuery}"`);
+  logger.debug(`[GlobalSearch] Query normalizada: "${cleanQuery}"`);
 
-  // Tentativa 1: com filtro CS
-  const attempt1 = await doOpenAlexFetch(cleanQuery, true, 1, articleLimit);
+  // Tentativa 1: search= sem nenhum filtro extra (máximo recall)
+  const attempt1 = await doOpenAlexFetch(cleanQuery, [], 1, articleLimit);
   if (attempt1.articles.length > 0) return attempt1.articles;
 
-  // Tentativa 2: sem filtro CS (mesma query, mais abrangente)
-  const attempt2 = await doOpenAlexFetch(cleanQuery, false, 2, articleLimit);
-  if (attempt2.articles.length > 0) return attempt2.articles;
+  // Tentativa 2: se a query contém nome próprio entre aspas, tenta busca exata no título.
+  // O endpoint search= faz relevance match — nomes de projetos locais ("Mermãs Digitais")
+  // muitas vezes aparecem no título mesmo sem indexão ampla.
+  const properName = extractProperName(cleanQuery);
+  if (properName) {
+    logger.info(`[GlobalSearch] 🔍 Tentativa 2 — busca por título exato: "${properName}"`);
+    const titleFilter = [`title.search:${properName}`];
+    const attempt2 = await doOpenAlexFetch(properName, titleFilter, 2, articleLimit);
+    if (attempt2.articles.length > 0) return attempt2.articles;
+  }
 
-  // Tentativa 3: fallback removendo nomes próprios não-ASCII + filtro CS
+  // Tentativa 3: fallback conceitual (remove nomes próprios não-ASCII) sem filtros
+  // Isso cobre temas como inclusão feminina em STEAM, que não citam "Mermãs Digitais"
+  // mas são semanticamente relevantes para a pesquisa.
   const fallbackQuery = buildFallbackQuery(cleanQuery);
   if (fallbackQuery) {
-    logger.log(`[GlobalSearch] 🔄 Fallback query (sem nomes próprios): "${fallbackQuery}"`);
-
-    const attempt3 = await doOpenAlexFetch(fallbackQuery, true, 3, articleLimit);
+    logger.info(`[GlobalSearch] 🔄 Tentativa 3 — fallback conceitual: "${fallbackQuery}"`);
+    const attempt3 = await doOpenAlexFetch(fallbackQuery, [], 3, articleLimit);
     if (attempt3.articles.length > 0) return attempt3.articles;
 
-    // Tentativa 4: fallback sem filtro CS
-    const attempt4 = await doOpenAlexFetch(fallbackQuery, false, 4, articleLimit);
+    // Tentativa 4: fallback + filtro CS (narrowing para reduzir ruído em conceitos genéricos)
+    logger.info(`[GlobalSearch] 🔄 Tentativa 4 — fallback + filtro CS`);
+    const attempt4 = await doOpenAlexFetch(
+      fallbackQuery,
+      [`topics.field.id:${CS_FIELD_ID}`],
+      4,
+      articleLimit
+    );
     if (attempt4.articles.length > 0) return attempt4.articles;
   }
 
@@ -205,6 +254,9 @@ async function fetchOpenAlexWorks(
 // ---------------------------------------------------------------------------
 
 export async function GET(request: Request) {
+  // Sinaliza ao PPR que esta rota é dinâmica — deve ficar fora do try/catch
+  // para que a rejeição se propague corretamente ao sistema de prerender.
+  await connection();
   try {
     const session = await auth();
 
@@ -244,7 +296,7 @@ export async function GET(request: Request) {
     const rawLimit = Number(searchParams.get('limit') ?? '25');
     const articleLimit = [10, 25].includes(rawLimit) ? rawLimit : 25;
 
-    logger.log(
+    logger.info(
       `[GlobalSearch] ⚡ Nova busca global | query: "${q}" | queryId: ${queryId ?? 'novo'} | userId: ${userId ?? 'anon'}`
     );
 
@@ -254,7 +306,7 @@ export async function GET(request: Request) {
         .update(searchQueries)
         .set({ status: 'searching', expandedQuery: 'source:openalex' })
         .where(eq(searchQueries.id, queryId));
-      logger.log(`[GlobalSearch] 📝 QueryID recebido e atualizado para searching: ${queryId}`);
+      logger.debug(`[GlobalSearch] 📝 QueryID recebido → searching: ${queryId}`);
     } else {
       const [inserted] = await db
         .insert(searchQueries)
@@ -266,7 +318,7 @@ export async function GET(request: Request) {
         })
         .returning();
       queryId = inserted.id;
-      logger.log(`[GlobalSearch] 📝 QueryID criado: ${queryId}`);
+      logger.info(`[GlobalSearch] 📝 QueryID criado: ${queryId}`);
     }
 
     // 2. Fetch from OpenAlex
@@ -290,9 +342,28 @@ export async function GET(request: Request) {
 
     // Garante que o número de resultados não ultrapassa o limite configurado pelo usuário
     allResults = allResults.slice(0, articleLimit);
-    logger.log(
+    logger.debug(
       `[GlobalSearch] 📊 Limite aplicado: ${articleLimit} | Resultados: ${allResults.length}`
     );
+
+    // Fase C (Batch 2): paridade com SOL — poucos resultados não são suficientes para
+    // revisão sistemática. Marca needs_refinement para acionar fallback automático.
+    const MIN_USEFUL_ARTICLES = 5;
+    if (allResults.length > 0 && allResults.length < MIN_USEFUL_ARTICLES) {
+      await db
+        .update(searchQueries)
+        .set({ status: 'needs_refinement' })
+        .where(eq(searchQueries.id, queryId));
+      logger.warn(
+        `[GlobalSearch] ⚠️ Apenas ${allResults.length} resultado(s) — marcando needs_refinement`
+      );
+      return NextResponse.json({
+        success: true,
+        needs_refinement: true,
+        total_found: allResults.length,
+        query_id: queryId,
+      });
+    }
 
     // 3. DOI deduplication — reuse already-processed articles to avoid redundant extraction
     const newArticleIds: string[] = [];
@@ -346,7 +417,7 @@ export async function GET(request: Request) {
         }
       }
 
-      logger.log(
+      logger.info(
         `[GlobalSearch] ♻️ ${toInsertCached.length} do cache | ${toInsertFresh.length} novos para extração`
       );
 
@@ -388,7 +459,7 @@ export async function GET(request: Request) {
               updatedAt: sql`now()`,
             },
           });
-        logger.log(`[GlobalSearch] ✅ ${cachedRows.length} artigos do cache inseridos`);
+        logger.info(`[GlobalSearch] ✅ ${cachedRows.length} artigos do cache inseridos`);
       }
 
       // Insert fresh articles as pending (Inngest will process them)
@@ -411,7 +482,7 @@ export async function GET(request: Request) {
             }))
           )
           .onConflictDoNothing();
-        logger.log(
+        logger.info(
           `[GlobalSearch] ✅ ${toInsertFresh.length} artigos novos inseridos como pending`
         );
 
@@ -447,13 +518,13 @@ export async function GET(request: Request) {
       }
       const { inngest } = await import('@/server/inngest/client');
       await inngest.send(events);
-      logger.log(
-        `[GlobalSearch] 🚀 ${events.length} evento(s) Inngest enviados com ${newArticleIds.length} artigo(s)`
+      logger.info(
+        `[GlobalSearch] 🚀 ${events.length} evento(s) Inngest com ${newArticleIds.length} artigo(s)`
       );
     } else if (allResults.length > 0) {
       // All from cache — mark done immediately
       await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
-      logger.log(`[GlobalSearch] ✅ Todos do cache — query marcada como done`);
+      logger.info(`[GlobalSearch] ✅ Todos do cache — done`);
     } else {
       // No results at all — also mark done
       await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
