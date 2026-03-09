@@ -192,7 +192,7 @@ export const processSingleArticle = inngest.createFunction(
     retries: 2,
     concurrency: [
       // Máximo de requisições simultâneas ao Python worker em toda a conta
-      { scope: 'account', key: '"python-worker"', limit: 8 },
+      { scope: 'account', key: '"python-worker"', limit: 5 },
       // Cada usuário processa no máximo 4 artigos ao mesmo tempo (fairness)
       { scope: 'fn', key: 'event.data.user_id', limit: 4 },
     ],
