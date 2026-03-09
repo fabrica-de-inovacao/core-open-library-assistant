@@ -8,10 +8,11 @@ project_name: 'sol-open-library-assistant'
 # TypeScript é o primário (Next.js app). Python cobre o worker em /worker.
 # Para JavaScript/TypeScript, usar "typescript".
 languages:
-  - typescript
-  - python
+- typescript
+- python
 
-# Encoding dos arquivos fonte
+# the encoding used by text files in the project
+# For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
 encoding: 'utf-8'
 
 # Backend de linguagem (LSP padrão para VS Code)
@@ -22,11 +23,11 @@ ignore_all_files_in_gitignore: true
 
 # Caminhos adicionais a ignorar (além do .gitignore)
 ignored_paths:
-  - '.next/**'
-  - 'node_modules/**'
-  - 'worker/__pycache__/**'
-  - 'src/server/db/migrations/meta/**'
-  - 'public/**'
+- '.next/**'
+- 'node_modules/**'
+- 'worker/__pycache__/**'
+- 'src/server/db/migrations/meta/**'
+- 'public/**'
 
 # whether the project is in read-only mode
 # If set to true, all editing tools will be disabled and attempts to use them will result in an error
@@ -44,8 +45,8 @@ base_modes: []
 
 # Modos padrão (podem ser sobrescritos via CLI)
 default_modes:
-  - 'interactive'
-  - 'editing'
+- 'interactive'
+- 'editing'
 
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
@@ -96,3 +97,7 @@ symbol_info_budget:
 # fixed set of tools to use as the base tool set (if non-empty), replacing Serena's default set of tools.
 # This cannot be combined with non-empty excluded_tools or included_optional_tools.
 fixed_tools: []
+
+# list of regex patterns which, when matched, mark a memory entry as read‑only.
+# Extends the list from the global configuration, merging the two lists.
+read_only_memory_patterns: []

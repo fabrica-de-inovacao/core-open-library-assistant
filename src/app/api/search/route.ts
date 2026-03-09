@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { connection } from 'next/server';
 import { z } from 'zod';
 import * as cheerio from 'cheerio';
 import { eq, inArray, and, sql } from 'drizzle-orm';
@@ -147,6 +148,9 @@ async function fetchSOLPage(
 }
 
 export async function GET(request: Request) {
+  // Sinaliza ao PPR que esta rota é dinâmica — deve ficar fora do try/catch
+  // para que a rejeição se propague corretamente ao sistema de prerender.
+  await connection();
   try {
     const session = await auth();
 

@@ -138,8 +138,16 @@ export function ChatView({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
+  // Scroll instantâneo — usado no auto-scroll ao chegar mensagens novas
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // Scroll suave — usado somente no botão manual "Rolar para baixo"
+  const scrollToBottomSmooth = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, []);
 
   // Scroll automático quando chegam mensagens novas
@@ -266,10 +274,10 @@ export function ChatView({
           panelRef={mainPanelRef}
           defaultSize={100}
           minSize={30}
-          className="flex min-h-0 min-w-0 flex-col overflow-hidden border-[3px] border-red-600"
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
           style={{ transition: 'flex 380ms cubic-bezier(0.16, 1, 0.3, 1)' }}
         >
-          <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-[3px] border-blue-600">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {/* Histórico de queries */}
             {queryGroups.length > 0 && (
               <QueryHistoryBar
@@ -282,9 +290,9 @@ export function ChatView({
             {/* Lista de mensagens */}
             <div
               ref={scrollContainerRef}
-              className="flex-1 overflow-x-hidden overflow-y-auto border-[3px] border-green-600 py-6"
+              className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-6"
             >
-              <div className="mx-auto max-w-4xl space-y-4 border-[3px] border-yellow-600 px-4">
+              <div className="mx-auto max-w-4xl space-y-4 px-4">
                 {displayMessages.map((msg) => (
                   <ChatMessageItem
                     key={msg.id}
@@ -308,19 +316,21 @@ export function ChatView({
               </div>
             </div>
 
-            {/* Botão de scroll para baixo */}
-            {showScrollButton && (
-              <button
-                onClick={scrollToBottom}
-                className="group/scroll border-border/30 bg-background/40 hover:bg-background/80 absolute bottom-38 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0 rounded-full border px-3 py-2 shadow-md backdrop-blur-md transition-all duration-300"
-                aria-label="Rolar para o fim"
-              >
-                <ChevronsDown className="text-foreground/60 group-hover/scroll:text-foreground h-4 w-4 shrink-0 transition-colors duration-300" />
-                <span className="text-foreground/80 max-w-0 overflow-hidden text-xs font-medium whitespace-nowrap transition-all duration-300 group-hover/scroll:max-w-[12rem]">
-                  Rolar para o fim
-                </span>
-              </button>
-            )}
+            {/* Botão de scroll para baixo — sempre renderizado, visibilidade via CSS */}
+            <button
+              onClick={scrollToBottomSmooth}
+              className={`group/scroll border-border/30 bg-background/40 hover:bg-background/80 absolute bottom-38 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0 rounded-full border px-3 py-2 shadow-md backdrop-blur-md transition-all duration-300 ${
+                showScrollButton
+                  ? 'translate-y-0 opacity-100'
+                  : 'pointer-events-none translate-y-2 opacity-0'
+              }`}
+              aria-label="Rolar para o fim"
+            >
+              <ChevronsDown className="text-foreground/60 group-hover/scroll:text-foreground h-4 w-4 shrink-0 transition-colors duration-300" />
+              <span className="text-foreground/80 max-w-0 overflow-hidden text-xs font-medium whitespace-nowrap transition-all duration-300 group-hover/scroll:max-w-48">
+                Rolar para o fim
+              </span>
+            </button>
 
             {/* Barra de status global do pipeline — P-StatusBar */}
             <PipelineStatusBar
@@ -333,7 +343,7 @@ export function ChatView({
             />
 
             {/* Barra de input */}
-            <div className="border-[3px] border-purple-600">
+            <div>
               <ChatInputBar
                 input={input}
                 onInputChange={handleInputChange}
@@ -384,14 +394,18 @@ export function ChatView({
         )}
       </ResizablePanelGroup>
 
-      {/* ── Aba lateral para re-abrir o painel do acervo ── */}
-      {!isPanelOpen && hasArticles && (
+      {/* ── Aba lateral para re-abrir o painel do acervo — sempre no DOM quando há artigos, visibilidade via CSS ── */}
+      {hasArticles && (
         <button
           onClick={() => {
             extractionsPanelRef.current?.expand();
             mainPanelRef.current?.resize('58');
           }}
-          className="group/tab border-border/60 bg-background hover:bg-muted hover:border-primary/40 absolute top-1/2 right-0 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-2 rounded-l-xl border border-r-0 px-2.5 py-4 shadow-md transition-all"
+          className={`group/tab border-border/60 bg-background hover:bg-muted hover:border-primary/40 absolute top-1/2 right-0 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-2 rounded-l-xl border border-r-0 px-2.5 py-4 shadow-md transition-all duration-300 ${
+            !isPanelOpen
+              ? 'translate-x-0 opacity-100'
+              : 'pointer-events-none translate-x-4 opacity-0'
+          }`}
           aria-label="Abrir painel do acervo"
         >
           <ChevronLeft className="text-muted-foreground group-hover/tab:text-primary h-3.5 w-3.5 shrink-0 transition-colors" />
@@ -407,7 +421,7 @@ export function ChatView({
         open={attachments.isAttachDialogOpen}
         onOpenChange={attachments.setIsAttachDialogOpen}
       >
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent className="sm:max-w-130">
           <DialogHeader>
             <DialogTitle>Adicionar Referência</DialogTitle>
             <DialogDescription>

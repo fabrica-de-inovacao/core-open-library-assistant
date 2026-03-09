@@ -31,7 +31,7 @@ import { MermaidBlock, CodeBlock, AssetWrapper } from './AssetRenderers';
 // TypingIndicator — ChatGPT style (sem bolha, avatar lateral)
 // ---------------------------------------------------------------------------
 export const TypingIndicator = () => (
-  <div className="flex items-start gap-3">
+  <div className="chat-message-enter flex items-start gap-3">
     <div className="bg-muted ring-border mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-1">
       <Library className="text-primary h-3.5 w-3.5" />
     </div>
@@ -280,7 +280,7 @@ export const ChatMessageItem = React.memo(
     // ----------------------------------------------------------------
     if (isUser) {
       return (
-        <div className="flex items-end justify-end gap-2.5">
+        <div className="chat-message-enter flex items-end justify-end gap-2.5">
           <div className="bg-primary text-primary-foreground max-w-[75%] rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-sm">
             <p className="text-[14px] leading-relaxed whitespace-pre-wrap">{textContent}</p>
           </div>
@@ -295,7 +295,7 @@ export const ChatMessageItem = React.memo(
     // ASSISTANT MESSAGE — fullwidth, sem bolha, avatar lateral
     // ----------------------------------------------------------------
     return (
-      <div className="flex items-start gap-3">
+      <div className="chat-message-enter flex items-start gap-3">
         {/* Avatar */}
         <div className="bg-muted ring-border mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-1">
           <Library className="text-primary h-3.5 w-3.5" />
@@ -339,7 +339,7 @@ export const ChatMessageItem = React.memo(
 
               {/* ── CONCLUÍDO: ReactMarkdown renderizado uma única vez após o stream ── */}
               {!isStreaming && (
-                <div className="prose prose-sm dark:prose-invert text-foreground max-w-none font-sans text-[14px] leading-relaxed">
+                <div className="animate-in fade-in prose prose-sm dark:prose-invert text-foreground max-w-none font-sans text-[14px] leading-relaxed duration-300">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
@@ -453,6 +453,8 @@ export const ChatMessageItem = React.memo(
                               onDownload={handleDownloadCsv as any}
                               downloadLabel="Baixar CSV"
                               contentClassName="p-0"
+                              previewZoom={1}
+                              previewFull
                             >
                               <div className="w-full overflow-x-auto">
                                 <table className="divide-border/50 min-w-full divide-y">
