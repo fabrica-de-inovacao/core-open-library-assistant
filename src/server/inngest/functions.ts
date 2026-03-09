@@ -19,7 +19,7 @@ export const processArticlesBatch = inngest.createFunction(
     retries: 2,
     // Orquestrador recebe no máximo N batches simultâneos; o trabalho pesado
     // fica no processSingleArticle que tem seus próprios limites por user_id.
-    concurrency: { limit: 10 },
+    concurrency: { limit: 5 },
     cancelOn: [{ event: 'app/search.cancelled', match: 'data.query_id' }],
   },
   { event: 'app/process.articles.batch' },
