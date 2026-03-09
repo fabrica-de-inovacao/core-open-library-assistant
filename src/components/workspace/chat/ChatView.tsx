@@ -43,6 +43,7 @@ import type { SearchAttempt } from '@/components/workspace/proposals';
 import { useSidebar } from '@/components/ui/sidebar';
 import type { useChatOrchestration } from '@/hooks/useChatOrchestration';
 import type { useAttachments } from '@/hooks/useAttachments';
+import type { AnalysisMode, ModelValue } from '@/hooks/useSearchSettings';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -57,12 +58,12 @@ interface ChatViewProps {
   orchestration: ReturnType<typeof useChatOrchestration>;
   /** Resultado completo de useAttachments — instanciado no page.tsx */
   attachments: ReturnType<typeof useAttachments>;
-  /** Limite de artigos por busca */
-  searchLimit: 10 | 25;
-  onSearchLimitChange: (v: 10 | 25) => void;
+  /** Modo de análise unificado (substitui searchLimit + synthesisMode) */
+  analysisMode?: AnalysisMode;
+  onAnalysisModeChange?: (m: AnalysisMode) => void;
   /** Modelo de IA — selector compacto no ChatInputBar */
-  modelId?: import('@/hooks/useSearchSettings').ModelValue;
-  onModelChange?: (m: import('@/hooks/useSearchSettings').ModelValue) => void;
+  modelId?: ModelValue;
+  onModelChange?: (m: ModelValue) => void;
   /** Abre modal de login — recebe o texto pendente para retomar após login */
   onShowLoginModal?: (pendingText?: string) => void;
 }
@@ -76,8 +77,8 @@ export function ChatView({
   authStatus,
   orchestration,
   attachments,
-  searchLimit,
-  onSearchLimitChange,
+  analysisMode = 'auto',
+  onAnalysisModeChange,
   modelId,
   onModelChange,
   onShowLoginModal,
@@ -101,9 +102,6 @@ export function ChatView({
     realtimeStatus,
     suggestionChips,
     clearSuggestionChips,
-    // Fase C (IA-04): modo de síntese
-    synthesisMode,
-    setSynthesisMode,
     // P-StatusBar: status da query ativa no DB (done/needs_refinement/processing/etc.)
     queryStatus,
   } = orchestration;
@@ -353,12 +351,10 @@ export function ChatView({
                 suggestionChips={chipsList}
                 onSuggestionClick={handleSuggestionClick}
                 attachments={attachments}
-                searchLimit={searchLimit}
-                onSearchLimitChange={onSearchLimitChange}
+                analysisMode={analysisMode}
+                onAnalysisModeChange={onAnalysisModeChange}
                 modelId={modelId}
                 onModelChange={onModelChange}
-                synthesisMode={synthesisMode}
-                onSynthesisModeChange={setSynthesisMode}
               />
             </div>
           </div>

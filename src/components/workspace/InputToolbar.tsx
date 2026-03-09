@@ -4,18 +4,18 @@
  * components/workspace/InputToolbar.tsx
  *
  * Toolbar inferior compartilhada entre ChatInputBar e HomeView.
- * Contém: popover de modelo · indicador de cobertura · pill de síntese · pill de limite.
+ * Contém: popover de modelo · indicador de cobertura · seletor de modo de análise.
  *
- * Slots:
- *  - leftSlot  — renderizado antes do modelo (ex: botão Anexar no HomeView)
- *  - rightSlot — renderizado após o pill de limite (ex: botão Enviar no HomeView)
+ * Modos de análise (FEAT-02):
+ *   🤖 Auto      → RouterAgent decide (límite e síntese adaptativos)
+ *   ⚡ Rápida    → 10 artigos + resumo conciso
+ *   🔍 Estendida → 20 artigos + revisão sistemática completa
  */
 
-import { Globe, Cpu, ChevronDown, Check, Wand2, Sparkles, BookOpen } from 'lucide-react';
+import { Globe, Cpu, ChevronDown, Check, Wand2, Zap, BookOpen } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import type { SynthesisMode } from '@/hooks/useChatOrchestration';
-import { MODEL_OPTIONS, type ModelValue } from '@/hooks/useSearchSettings';
+import { MODEL_OPTIONS, type ModelValue, type AnalysisMode } from '@/hooks/useSearchSettings';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -26,13 +26,9 @@ export interface InputToolbarProps {
   modelId?: ModelValue;
   onModelChange?: (m: ModelValue) => void;
 
-  // Fase C (IA-04): modo de síntese
-  synthesisMode?: SynthesisMode;
-  onSynthesisModeChange?: (m: SynthesisMode) => void;
-
-  // Limite de artigos
-  searchLimit: 10 | 25;
-  onSearchLimitChange: (v: 10 | 25) => void;
+  // Modo de análise unificado (substitui synthesisMode + searchLimit separados)
+  analysisMode?: AnalysisMode;
+  onAnalysisModeChange?: (m: AnalysisMode) => void;
 
   /**
    * Conteúdo injetado antes do popover de modelo.
@@ -41,55 +37,63 @@ export interface InputToolbarProps {
   leftSlot?: React.ReactNode;
 
   /**
-   * Conteúdo injetado após o pill de limite.
+   * Conteúdo injetado após o pill de modo.
    * Usado pelo HomeView para o botão Enviar.
    */
   rightSlot?: React.ReactNode;
 }
 
 // ---------------------------------------------------------------------------
-// Componente
+// Configuração dos modos de análise
 // ---------------------------------------------------------------------------
 
-const SYNTHESIS_OPTIONS: {
-  value: SynthesisMode;
+const ANALYSIS_OPTIONS: {
+  value: AnalysisMode;
   icon: React.ReactNode;
   label: string;
-  tooltip: string;
+  description: string;
+  badge: string;
 }[] = [
   {
     value: 'auto',
     icon: <Wand2 className="h-2.5 w-2.5" />,
     label: 'Auto',
-    tooltip: 'RouterAgent decide o modo automaticamente',
+    description: 'IA escolhe o modo ideal para a consulta',
+    badge: 'IA decide',
   },
   {
     value: 'quick',
-    icon: <Sparkles className="h-2.5 w-2.5" />,
+    icon: <Zap className="h-2.5 w-2.5" />,
     label: 'Rápida',
-    tooltip: 'Síntese concisa — 2-3 parágrafos',
+    description: 'Até 10 artigos · resumo conciso · ~1-2 min',
+    badge: '10 artigos',
   },
   {
-    value: 'systematic',
+    value: 'extended',
     icon: <BookOpen className="h-2.5 w-2.5" />,
-    label: 'Sistemática',
-    tooltip: 'Revisão sistemática completa com tabela e gaps',
+    label: 'Estendida',
+    description: 'Até 20 artigos · revisão sistemática · ~5-8 min',
+    badge: '20 artigos',
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Componente
+// ---------------------------------------------------------------------------
 
 export function InputToolbar({
   modelId,
   onModelChange,
-  synthesisMode = 'auto',
-  onSynthesisModeChange,
-  searchLimit,
-  onSearchLimitChange,
+  analysisMode = 'auto',
+  onAnalysisModeChange,
   leftSlot,
   rightSlot,
 }: InputToolbarProps) {
+  const currentMode = ANALYSIS_OPTIONS.find((o) => o.value === analysisMode) ?? ANALYSIS_OPTIONS[0];
+
   return (
     <div className="border-border/40 flex items-center gap-1.5 border-t px-3 py-1.5">
-      {/* Slot esquerdo (ex: botão Anexar no HomeView) — separador responsabilidade do slot */}
+      {/* Slot esquerdo (ex: botão Anexar no HomeView) */}
       {leftSlot}
 
       {/* Popover de modelo */}
@@ -152,62 +156,63 @@ export function InputToolbar({
 
       <div className="flex-1" />
 
-      {/* Pill de modo de síntese */}
-      {onSynthesisModeChange && (
-        <>
-          <div className="border-border/30 bg-muted/40 flex items-center rounded-lg border p-0.5">
-            {SYNTHESIS_OPTIONS.map(({ value, icon, label, tooltip }) => (
-              <Tooltip key={value}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onSynthesisModeChange(value)}
-                    className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-all ${
-                      synthesisMode === value
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {icon}
-                    {label}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" sideOffset={8} className="text-xs">
-                  {tooltip}
-                </TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-          <div className="bg-border/40 h-3 w-px shrink-0" />
-        </>
-      )}
-
-      {/* Pill de limite de artigos */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="border-border/30 bg-muted/40 flex items-center rounded-lg border p-0.5">
-            {([10, 25] as const).map((v) => (
+      {/* Seletor de modo de análise (FEAT-02) */}
+      {onAnalysisModeChange && (
+        <Popover>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="border-border/30 bg-muted/40 hover:bg-muted/70 flex items-center gap-1.5 rounded-lg border px-2 py-0.5 transition-colors"
+                >
+                  <span className="text-muted-foreground">{currentMode.icon}</span>
+                  <span className="text-[10px] font-medium">{currentMode.label}</span>
+                  <ChevronDown className="text-muted-foreground h-2.5 w-2.5 opacity-50" />
+                </button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={8} className="text-xs">
+              Modo de análise · {currentMode.badge}
+            </TooltipContent>
+          </Tooltip>
+          <PopoverContent side="top" align="end" sideOffset={8} className="w-72 p-1.5">
+            <p className="text-muted-foreground mb-1.5 px-1.5 text-[10px] font-semibold tracking-wider uppercase">
+              Modo de análise
+            </p>
+            {ANALYSIS_OPTIONS.map((opt) => (
               <button
-                key={v}
+                key={opt.value}
                 type="button"
-                onClick={() => onSearchLimitChange(v)}
-                className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-all ${
-                  searchLimit === v
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
+                onClick={() => onAnalysisModeChange(opt.value)}
+                className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                  analysisMode === opt.value
+                    ? 'bg-accent text-accent-foreground'
+                    : 'hover:bg-accent/60'
                 }`}
               >
-                {v}
+                <span className="mt-0.5 shrink-0">{opt.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[12px] font-semibold">{opt.label}</span>
+                    <span className="text-muted-foreground bg-muted rounded px-1 py-0.5 text-[9px] font-medium">
+                      {opt.badge}
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground mt-0.5 text-[11px] leading-snug">
+                    {opt.description}
+                  </p>
+                </div>
+                {analysisMode === opt.value && (
+                  <Check className="mt-0.5 h-3 w-3 shrink-0 text-green-500" />
+                )}
               </button>
             ))}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="top" sideOffset={8} className="text-xs">
-          Máximo de artigos por busca
-        </TooltipContent>
-      </Tooltip>
+          </PopoverContent>
+        </Popover>
+      )}
 
-      {/* Slot direito (ex: botão Enviar no HomeView) — separador responsabilidade do slot */}
+      {/* Slot direito (ex: botão Enviar no HomeView) */}
       {rightSlot}
     </div>
   );

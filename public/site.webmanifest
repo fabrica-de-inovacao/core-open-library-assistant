@@ -1,0 +1,26 @@
+{
+  "name": "C.O.R.E. AI",
+  "short_name": "C.O.R.E.",
+  "description": "Plataforma de revisão sistemática automatizada com inteligência artificial",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "type": "image/png",
+      "sizes": "180x180"
+    },
+    {
+      "src": "/og-image.png",
+      "type": "image/png",
+      "sizes": "1200x630",
+      "purpose": "any"
+    }
+  ]
+}

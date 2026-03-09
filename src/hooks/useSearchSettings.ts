@@ -4,13 +4,16 @@
  * hooks/useSearchSettings.ts
  *
  * Gerencia as preferências de busca persistidas em localStorage:
- * - searchLimit (10 | 25 artigos por busca)
+ * - analysisMode ('auto' | 'quick' | 'extended') — unifica searchLimit + synthesisMode
  * - modelId (modelo Gemini selecionado)
  *
- * Centraliza também as constantes de modelo para evitar duplicação com page.tsx.
+ * Mapeamento de analysisMode:
+ *   'quick'    → 10 artigos + síntese quick_lookup
+ *   'extended' → 20 artigos + síntese systematic_review
+ *   'auto'     → RouterAgent decide (10 por padrão, escalado pelo agente)
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 // ---------------------------------------------------------------------------
 // Constantes exportadas — única fonte da verdade para MODEL_OPTIONS
@@ -31,57 +34,86 @@ export type ModelValue = (typeof MODEL_OPTIONS)[number]['value'];
 export const DEFAULT_MODEL: ModelValue = 'gemini-2.5-flash';
 
 // ---------------------------------------------------------------------------
+// Analysis Mode — unifica searchLimit + synthesisMode em um único parâmetro
+// ---------------------------------------------------------------------------
+
+export type AnalysisMode = 'auto' | 'quick' | 'extended';
+
+/** Mapeia o modo de análise para o número de artigos e modo de síntese correspondentes */
+export function analysisModeToSettings(mode: AnalysisMode): {
+  searchLimit: 10 | 20;
+  synthesisMode: 'auto' | 'quick' | 'systematic';
+} {
+  switch (mode) {
+    case 'quick':
+      return { searchLimit: 10, synthesisMode: 'quick' };
+    case 'extended':
+      return { searchLimit: 20, synthesisMode: 'systematic' };
+    case 'auto':
+    default:
+      return { searchLimit: 10, synthesisMode: 'auto' };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
 export interface UseSearchSettingsReturn {
-  searchLimit: 10 | 25;
-  setSearchLimit: React.Dispatch<React.SetStateAction<10 | 25>>;
+  /** Modo de análise unificado (auto / quick / extended) */
+  analysisMode: AnalysisMode;
+  setAnalysisMode: (m: AnalysisMode) => void;
+  /** Número real de artigos derivado do analysisMode — para retrocompatibilidade */
+  searchLimit: 10 | 20;
   modelId: ModelValue;
   setModelId: (m: ModelValue) => void;
 }
 
 export function useSearchSettings(): UseSearchSettingsReturn {
-  // ── searchLimit ─────────────────────────────────────────────────────────
-  // Inicia sempre com o default fixo (25) para garantir Server/Client match na
-  // hidratação. O valor real do localStorage é aplicado num useEffect (client-only).
-  const [searchLimit, setSearchLimit] = useState<10 | 25>(25);
-
-  useEffect(() => {
-    const sync = () => {
-      try {
-        const stored = JSON.parse(localStorage.getItem('sol-settings') ?? '{}') as {
-          articlesPerSearch?: number;
-        };
-        const next = stored.articlesPerSearch === 10 ? 10 : 25;
-        setSearchLimit((prev) => (prev !== next ? next : prev));
-      } catch {
-        /* ignora */
+  // ── analysisMode ─────────────────────────────────────────────────────────
+  // Lazy initializer: lê localStorage uma única vez antes do primeiro render (sem useEffect)
+  const [analysisMode, setAnalysisModeState] = useState<AnalysisMode>(() => {
+    if (typeof window === 'undefined') return 'auto';
+    try {
+      const stored = JSON.parse(localStorage.getItem('sol-settings') ?? '{}') as {
+        analysisMode?: AnalysisMode;
+        articlesPerSearch?: number;
+      };
+      if (stored.analysisMode && ['auto', 'quick', 'extended'].includes(stored.analysisMode)) {
+        return stored.analysisMode;
       }
-    };
-    // Sincroniza na montagem (valor do localStorage) e quando a aba volta ao foco
-    sync();
-    window.addEventListener('focus', sync);
-    document.addEventListener('visibilitychange', sync);
-    return () => {
-      window.removeEventListener('focus', sync);
-      document.removeEventListener('visibilitychange', sync);
-    };
-  }, []);
+      if (stored.articlesPerSearch === 10) return 'quick';
+      if (stored.articlesPerSearch === 25 || stored.articlesPerSearch === 20) return 'extended';
+    } catch {
+      /* ignora */
+    }
+    return 'auto';
+  });
+
+  const setAnalysisMode = (m: AnalysisMode) => {
+    setAnalysisModeState(m);
+    try {
+      const stored = JSON.parse(localStorage.getItem('sol-settings') ?? '{}');
+      localStorage.setItem('sol-settings', JSON.stringify({ ...stored, analysisMode: m }));
+    } catch {
+      /* ignora */
+    }
+  };
 
   // ── modelId ──────────────────────────────────────────────────────────────
-  // Mesmo padrão: default fixo no useState, sync do localStorage no useEffect.
-  const [modelId, setModelIdState] = useState<ModelValue>(DEFAULT_MODEL);
-
-  useEffect(() => {
+  // Lazy initializer: lê localStorage uma única vez antes do primeiro render
+  const [modelId, setModelIdState] = useState<ModelValue>(() => {
+    if (typeof window === 'undefined') return DEFAULT_MODEL;
     const stored = localStorage.getItem('sol-model') as ModelValue | null;
-    if (stored && stored !== DEFAULT_MODEL) setModelIdState(stored);
-  }, []);
+    return stored ?? DEFAULT_MODEL;
+  });
 
   const setModelId = (m: ModelValue) => {
     setModelIdState(m);
     localStorage.setItem('sol-model', m);
   };
 
-  return { searchLimit, setSearchLimit, modelId, setModelId };
+  const { searchLimit } = analysisModeToSettings(analysisMode);
+
+  return { analysisMode, setAnalysisMode, searchLimit, modelId, setModelId };
 }

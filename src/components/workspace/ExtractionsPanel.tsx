@@ -55,8 +55,11 @@ export const ExtractionsPanel = React.memo(
       return () => clearTimeout(t);
     }, [activeQueryId]);
 
-    const totalPages = Math.ceil(articles.length / PAGE_SIZE);
-    const paginatedArticles = articles.slice(
+    // BUG-04: filtra artigos com status terminal 'failed' para não poluir o painel
+    const visibleArticles = articles.filter((a) => a.status !== 'failed');
+
+    const totalPages = Math.ceil(visibleArticles.length / PAGE_SIZE);
+    const paginatedArticles = visibleArticles.slice(
       (currentPage - 1) * PAGE_SIZE,
       currentPage * PAGE_SIZE
     );

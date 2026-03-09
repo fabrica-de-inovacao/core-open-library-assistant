@@ -124,7 +124,7 @@ export function WorkspaceHeader({
 
             {/* Badge de artigos encontrados */}
             {articleCount > 0 && (
-              <div className="border-border/50 bg-muted/50 text-muted-foreground flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium tabular-nums">
+              <div className="border-border/40 bg-muted/30 text-muted-foreground flex items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[10px] font-medium tabular-nums select-none">
                 <BookOpen className="h-3 w-3 shrink-0" />
                 <span>
                   {articleCount} {articleCount === 1 ? 'artigo' : 'artigos'}

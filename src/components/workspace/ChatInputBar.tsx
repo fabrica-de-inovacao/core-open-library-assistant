@@ -16,10 +16,10 @@ import { Paperclip, Send, Square, Library, Loader2, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AttachmentChip } from '@/components/workspace/AttachmentChip';
 import { InputToolbar } from '@/components/workspace/InputToolbar';
+import { useState } from 'react';
 import type { SuggestionChip } from '@/hooks/useChatOrchestration';
-import type { SynthesisMode } from '@/hooks/useChatOrchestration';
 import type { useAttachments } from '@/hooks/useAttachments';
-import type { ModelValue } from '@/hooks/useSearchSettings';
+import type { AnalysisMode, ModelValue } from '@/hooks/useSearchSettings';
 
 interface ChatInputBarProps {
   // Input principal
@@ -42,16 +42,12 @@ interface ChatInputBarProps {
   // Estado de anexos (hook consolidado)
   attachments: ReturnType<typeof useAttachments>;
 
-  // Limite de artigos
-  searchLimit: 10 | 25;
-  onSearchLimitChange: (v: 10 | 25) => void;
+  // Modo de análise unificado
+  analysisMode?: AnalysisMode;
+  onAnalysisModeChange?: (m: AnalysisMode) => void;
   // Modelo de IA (selector compacto na toolbar)
   modelId?: ModelValue;
-  onModelChange?: (
-    m: ModelValue
-  ) => void; /** Fase C (IA-04): modo de síntese selecionável pelo usuário */
-  synthesisMode?: SynthesisMode;
-  onSynthesisModeChange?: (m: SynthesisMode) => void;
+  onModelChange?: (m: ModelValue) => void;
 }
 
 export function ChatInputBar({
@@ -64,20 +60,29 @@ export function ChatInputBar({
   suggestionChips,
   onSuggestionClick,
   attachments,
-  searchLimit,
-  onSearchLimitChange,
+  analysisMode,
+  onAnalysisModeChange,
   modelId,
   onModelChange,
-  synthesisMode = 'auto',
-  onSynthesisModeChange,
 }: ChatInputBarProps) {
   const { chips, uploadState, doiState, setIsAttachDialogOpen, removeChip } = attachments;
+
+  // BUG-05: mostra spinner no botão de envio entre o click e o início do stream (showAbortButton=true)
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Quando o stream começa (showAbortButton vira true), o isSubmitting é desnecessário
+  const showSpinner = isSubmitting && !showAbortButton;
+
+  const handleSubmitWithLoading = (e?: React.FormEvent<HTMLFormElement>) => {
+    if (!input.trim()) return;
+    setIsSubmitting(true);
+    onSubmit(e);
+  };
 
   /** Enter envia; Shift+Enter adiciona nova linha */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      onSubmit();
+      handleSubmitWithLoading();
     }
   };
 
@@ -117,7 +122,7 @@ export function ChatInputBar({
       )}
 
       {/* ── Formulário principal ── */}
-      <form onSubmit={onSubmit} className="mx-auto max-w-2xl">
+      <form onSubmit={handleSubmitWithLoading} className="mx-auto max-w-2xl">
         <div className="border-border bg-card focus-within:border-primary focus-within:ring-primary rounded-2xl border shadow-sm transition-all focus-within:ring-1">
           {/* Chips de anexos */}
           {chips.length > 0 && (
@@ -181,10 +186,14 @@ export function ChatInputBar({
               <Button
                 type="submit"
                 size="icon"
-                disabled={!input.trim()}
+                disabled={!input.trim() || showSpinner}
                 className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-primary absolute top-1/2 right-1.5 h-8 w-8 -translate-y-1/2 rounded-xl shadow-sm transition-all focus-visible:ring-2 disabled:opacity-40"
               >
-                <Send className="h-3.5 w-3.5" />
+                {showSpinner ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
               </Button>
             )}
           </div>
@@ -193,10 +202,8 @@ export function ChatInputBar({
           <InputToolbar
             modelId={modelId}
             onModelChange={onModelChange}
-            synthesisMode={synthesisMode}
-            onSynthesisModeChange={onSynthesisModeChange}
-            searchLimit={searchLimit}
-            onSearchLimitChange={onSearchLimitChange}
+            analysisMode={analysisMode}
+            onAnalysisModeChange={onAnalysisModeChange}
           />
         </div>
 
