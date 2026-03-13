@@ -7,4 +7,5 @@ import '@/lib/env-check';
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [processArticlesBatch, processSingleArticle],
+  serveHost: process.env.AUTH_URL || undefined,
 });

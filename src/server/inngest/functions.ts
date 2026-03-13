@@ -19,7 +19,8 @@ export const processArticlesBatch = inngest.createFunction(
     retries: 2,
     // Orquestrador recebe no máximo N batches simultâneos; o trabalho pesado
     // fica no processSingleArticle que tem seus próprios limites por user_id.
-    concurrency: { limit: 5 },
+    // Self-Hosted Inngest: sem limites do plano Free, subimos pra 50.
+    concurrency: { limit: 50 },
     cancelOn: [{ event: 'app/search.cancelled', match: 'data.query_id' }],
   },
   { event: 'app/process.articles.batch' },
@@ -191,8 +192,8 @@ export const processSingleArticle = inngest.createFunction(
     id: 'process-single-article',
     retries: 2,
     concurrency: [
-      // Máximo de requisições simultâneas ao Python worker em toda a conta
-      { scope: 'account', key: '"python-worker"', limit: 5 },
+      // Self-Hosted Inngest: limite aumentado para Python worker, que agora aguenta mais.
+      { scope: 'account', key: '"python-worker"', limit: 20 },
       // Cada usuário processa no máximo 4 artigos ao mesmo tempo (fairness)
       { scope: 'fn', key: 'event.data.user_id', limit: 4 },
     ],

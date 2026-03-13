@@ -90,6 +90,7 @@ interface UseChatOrchestrationOptions {
 export function useChatOrchestration({
   urlQueryId,
   initialMessages,
+  authStatus,
   modelId,
   searchLimitOverride,
   initialSynthesisMode = 'auto',

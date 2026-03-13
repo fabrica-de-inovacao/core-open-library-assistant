@@ -41,4 +41,14 @@ type InngestEvents = {
 export const inngest = new Inngest({
   id: 'sol-assistant',
   schemas: new EventSchemas().fromRecord<InngestEvents>(),
+  // Intercepta chamadas do SDK para enviar a senha Basic
+  // e contornar a proteção do NGINX no Droplet
+  fetch: (input, init) => {
+    const encodedAuth = Buffer.from('admin:inngest2026').toString('base64');
+    const authHeader = `Basic ${encodedAuth}`;
+
+    const headers = new Headers(init?.headers);
+    headers.set('Authorization', authHeader);
+    return fetch(input, { ...init, headers });
+  },
 });
