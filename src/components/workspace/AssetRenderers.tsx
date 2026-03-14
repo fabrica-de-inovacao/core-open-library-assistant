@@ -377,9 +377,21 @@ export const MermaidBlock = ({ code }: { code: string }) => {
 
         // 4. Corrige strings mal formatadas como rótulos contendo aspas
         // Algumas respostas do LLM vêm com textos "algo" que quebram sem scape.
-         // Detecta se é um diagrama baseado em indentação (mindmap)
+
+        // Detecta se é um diagrama baseado em indentação (mindmap)
         // Para esses tipos, NÃO devemos remover o indentation — a hierarquia depende dele.
         const isIndentBased = /^mindmap/i.test(safeCode);
+
+        // 4a. (Mindmap only) Remove anotações de citação não suportadas que LLMs inserem.
+        //   Padrão 1: links markdown tipo [[**N**]](#article-row-uuid) — link de artigo
+        //   Padrão 2: referências numéricas tipo [1] ou [2, 3, 7] no final de um nó
+        // Ambos causam "Expecting SPACELINE... got NODE_ID" no parser do Mermaid.
+        if (isIndentBased) {
+          // Remove [[**N**]](#anything) — links com bold e anchor
+          safeCode = safeCode.replace(/\s*\[\[\*\*[^\]]+\*\*\]\]\([^)]*\)/g, '');
+          // Remove [N] ou [N, M, ...] onde o conteúdo é apenas números, vírgulas e espaços
+          safeCode = safeCode.replace(/\s*\[\s*\d+(?:\s*,\s*\d+)*\s*\]/g, '');
+        }
 
         const lines = safeCode.split('\n');
         const processedLines = lines.map((line) => {
