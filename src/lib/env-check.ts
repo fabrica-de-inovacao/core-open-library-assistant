@@ -41,8 +41,10 @@ export function checkRequiredEnvVars(): void {
     }
   }
 
-  // Em produção, verificar também as vars do Inngest Cloud
-  if (isProduction) {
+  // Em produção, verificar também as vars do Inngest Cloud,
+  // MAS ignorar caso estejamos usando o servidor self-hosted (Droplet)
+  const isSelfHosted = !!process.env.INNGEST_BASE_URL;
+  if (isProduction && !isSelfHosted) {
     const missingProd = PROD_ONLY_ENV_VARS.filter((key) => !process.env[key]);
     if (missingProd.length > 0) {
       throw new Error(
