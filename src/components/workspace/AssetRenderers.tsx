@@ -377,27 +377,32 @@ export const MermaidBlock = ({ code }: { code: string }) => {
 
         // 4. Corrige strings mal formatadas como rótulos contendo aspas
         // Algumas respostas do LLM vêm com textos "algo" que quebram sem scape.
-        // E IDs sem aspas ou espaços (Mermaid 11+ é estrito)
+         // Detecta se é um diagrama baseado em indentação (mindmap)
+        // Para esses tipos, NÃO devemos remover o indentation — a hierarquia depende dele.
+        const isIndentBased = /^mindmap/i.test(safeCode);
+
         const lines = safeCode.split('\n');
         const processedLines = lines.map((line) => {
-          let l = line.trim();
-          if (!l) return line;
+          if (!line.trim()) return line;
+
+          // Para diagramas indent-based, preserva o prefixo de espaços original.
+          const indent = isIndentBased ? (line.match(/^(\s*)/)?.[1] ?? '') : '';
+          // Aplica correções apenas no conteúdo sem o indent
+          let content = isIndentBased ? line.trimStart().trimEnd() : line.trim();
 
           // Trata node default quebrado: id"Texto" -> id["Texto"]
-          // ATENÇÃO: lookahead (?!\s*[\]\)\[]) — évita match em:
+          // ATENÇÃO: lookahead (?!\s*[\]\)\[]) — evita match em:
           //   - "Label" ["item1", ...] — sintaxe xychart-beta (seguido de \s*[)
           //   - "Label"] — fechamento de lista
           //   - "Label") — fechamento de parênteses
-          l = l.replace(/([a-zA-Z0-9_-]+)"([^"]+)"(?!\s*[\]\)\[])/g, '$1["$2"]');
+          content = content.replace(/([a-zA-Z0-9_-]+)"([^"]+)"(?!\s*[\]\)\[])/g, '$1["$2"]');
 
           // Parênteses () dentro de labels rhombus {} causam parse error no Mermaid
-          // (o parser interpreta '(' como início de nó stadium).
-          // Solução: envolver o inner em aspas duplas, que o Mermaid aceita.
-          // Ex: E{Texto (algo)} → E{"Texto (algo)"}
-          l = l.replace(/\{([^}"]*\([^}]*)\}/g, (_, inner) => `{"${inner.trim()}"}`);
+          content = content.replace(/\{([^}"]*\([^}]*)\}/g, (_, inner) => `{"${inner.trim()}"`);
 
-          return l;
+          return indent + content;
         });
+
 
         safeCode = processedLines.join('\n');
         console.log('[MermaidBlock] Código FINAL para render (id=%s):\n%s', id, safeCode);
