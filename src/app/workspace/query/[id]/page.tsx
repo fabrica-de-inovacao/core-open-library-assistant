@@ -1,4 +1,4 @@
-import WorkspacePage from '@/app/workspace/page';
+import { WorkspacePage } from '@/app/workspace/page';
 import { getChatMessages } from '@/server/actions/chat';
 
 export default async function QueryPage({ params }: { params: Promise<{ id: string }> }) {
