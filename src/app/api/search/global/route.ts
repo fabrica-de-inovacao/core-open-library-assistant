@@ -35,15 +35,42 @@ const OPENALEX_SELECT =
 
 const USER_AGENT = 'SOLAssistant/1.0 (mailto:dev@solassistant.app)';
 
-// ID do campo Computer Science no OpenAlex (usado apenas como filtro supplementar opcional).
-// NOTA: não aplicar como filtro obrigatório — pesquisas interdisciplinares (inclusão digital,
-// gênero em STEAM, educação) são indexadas sob campos como Education (22), Sociology (10), etc.
+// ID do campo Computer Science no OpenAlex (usado como filtro secundário opcional).
 const CS_FIELD_ID = '17';
 
-// PUBLISHER FILTER REMOVIDO INTENCIONALMENTE.
-// O filtro ACM|IEEE|Springer excluía venues brasileiras relevantes (SBC, CBIE, WIE, RBIE, SBSC)
-// e restringia pesquisas interdisciplinares. O OpenAlex já cobre essas publicações diretamente.
-// Controle de qualidade é feito pelo RelevanceGate no Inngest e pelo RerankerAgent.
+// ---------------------------------------------------------------------------
+// Filtros de publishers e idiomas — confirmados contra a API OpenAlex em 13/03/2026.
+// Usamos host_organization_lineage para capturar todas as sub-publicações do grupo.
+//
+// | Publisher          | OpenAlex ID             |
+// |--------------------|-------------------------|
+// | IEEE (principal)   | P4310319808             |
+// | IEEE (marca)       | P4322697011             |
+// | ACM                | P4310319798             |
+// | Springer Nature    | P4310319965             |
+// | Nature Portfolio   | P4310319908             |
+//
+// Idiomas: en (inglês), pt (português), es (espanhol)
+// ---------------------------------------------------------------------------
+
+/** IDs OpenAlex dos publishers aceitos (IEEE, ACM, SpringerNature, Nature). */
+const PUBLISHER_IDS = [
+  'P4310319808', // Institute of Electrical and Electronics Engineers
+  'P4322697011', // IEEE (brand)
+  'P4310319798', // Association for Computing Machinery
+  'P4310319965', // Springer Nature
+  'P4310319908', // Nature Portfolio
+];
+
+/**
+ * Filtro de publisher construído como OR (pipe) para o parâmetro filter do OpenAlex.
+ * Ex: primary_location.source.host_organization_lineage:P4310319808|P4322697011|...
+ */
+const PUBLISHER_FILTER =
+  `primary_location.source.host_organization_lineage:${PUBLISHER_IDS.join('|')}`;
+
+/** Filtro de idioma: inglês, português, espanhol. */
+const LANGUAGE_FILTER = 'language:en|pt|es';
 
 /**
  * Normaliza a query antes de enviar ao OpenAlex.
@@ -111,7 +138,7 @@ async function doOpenAlexFetch(
   attempt: number,
   perPage: number = 25
 ): Promise<{ articles: MappedArticle[]; totalCount: number }> {
-  const filters: string[] = ['type:article', ...extraFilters];
+  const filters: string[] = ['type:article', PUBLISHER_FILTER, LANGUAGE_FILTER, ...extraFilters];
 
   const filterStr = filters.length > 0 ? `&filter=${filters.join(',')}` : '';
   const url =

@@ -184,16 +184,13 @@
   }
 }
 
-/* PipelineStatusBar — barra de progresso indeterminado (fase searching / needs_refinement) */
-@keyframes progress-scan {
+/* PipelineStatusBar — linha de scan indeterminada */
+@keyframes pipeline-scan {
   0% {
-    transform: translateX(-100%);
-  }
-  50% {
-    transform: translateX(200%);
+    transform: translateX(-400%);
   }
   100% {
-    transform: translateX(200%);
+    transform: translateX(600%);
   }
 }
 

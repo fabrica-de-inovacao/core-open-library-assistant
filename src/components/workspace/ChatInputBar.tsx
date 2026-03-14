@@ -17,7 +17,6 @@ import { Button } from '@/components/ui/button';
 import { AttachmentChip } from '@/components/workspace/AttachmentChip';
 import { InputToolbar } from '@/components/workspace/InputToolbar';
 import { useState } from 'react';
-import type { SuggestionChip } from '@/hooks/useChatOrchestration';
 import type { useAttachments } from '@/hooks/useAttachments';
 import type { AnalysisMode, ModelValue } from '@/hooks/useSearchSettings';
 
@@ -34,10 +33,6 @@ interface ChatInputBarProps {
   // Mensagem pendente na fila (P-abort)
   pendingMessage?: string;
   hasPendingExtractions?: boolean;
-
-  // Chips de sugestão (P-chips)
-  suggestionChips: SuggestionChip[];
-  onSuggestionClick: (text: string) => void;
 
   // Estado de anexos (hook consolidado)
   attachments: ReturnType<typeof useAttachments>;
@@ -57,8 +52,6 @@ export function ChatInputBar({
   showAbortButton,
   onAbort,
   pendingMessage,
-  suggestionChips,
-  onSuggestionClick,
   attachments,
   analysisMode,
   onAnalysisModeChange,
@@ -99,27 +92,7 @@ export function ChatInputBar({
         </div>
       )}
 
-      {/* ── Chips de sugestão rápida (P-chips) ── */}
-      {suggestionChips.length > 0 && (
-        <div className="animate-in slide-in-from-bottom-2 fade-in mx-auto mb-2 max-w-2xl duration-300">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-muted-foreground shrink-0 text-[11px] font-medium">
-              O que fazer agora?
-            </span>
-            {suggestionChips.map((chip) => (
-              <button
-                key={chip.label}
-                type="button"
-                onClick={() => onSuggestionClick(chip.message)}
-                className="border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 hover:border-primary/60 focus-visible:ring-primary inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium transition-all focus-visible:ring-2 focus-visible:outline-none"
-              >
-                <span>{chip.icon}</span>
-                {chip.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+
 
       {/* ── Formulário principal ── */}
       <form onSubmit={handleSubmitWithLoading} className="mx-auto max-w-2xl">

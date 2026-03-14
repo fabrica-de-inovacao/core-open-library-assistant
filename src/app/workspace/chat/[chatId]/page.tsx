@@ -1,5 +1,5 @@
 import { connection } from 'next/server';
-import WorkspacePage from '@/app/workspace/page';
+import { WorkspacePage } from '@/app/workspace/page';
 import { getChatMessages } from '@/server/actions/chat';
 
 /**

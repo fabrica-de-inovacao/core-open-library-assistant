@@ -35,8 +35,15 @@ import type { RecentChat } from '@/server/actions/chat';
 // ---------------------------------------------------------------------------
 // Wrapper público exportado pela rota Next.js
 // ---------------------------------------------------------------------------
+export default function WorkspaceRoutePage() {
+  return (
+    <Suspense fallback={<div>Loading workspace…</div>}>
+      <WorkspaceShellKeyed />
+    </Suspense>
+  );
+}
 
-export default function WorkspacePage({ initialMessages }: { initialMessages?: UIMessage[] }) {
+export function WorkspacePage({ initialMessages }: { initialMessages?: UIMessage[] }) {
   return (
     <Suspense fallback={<div>Loading workspace…</div>}>
       <WorkspaceShellKeyed initialMessages={initialMessages} />

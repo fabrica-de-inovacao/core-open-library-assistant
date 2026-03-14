@@ -17,15 +17,17 @@ export function NavItem({ href, icon, label, active }: NavItemProps) {
 
   // Tenta usar o ActiveChatContext para guardar a navegação quando há busca em andamento
   let requestNavigation: ((path: string) => void) | null = null;
+  let chatIsLocked = false;
   try {
-    const ctx = useActiveChat(); // eslint-disable-line react-hooks/rules-of-hooks
+    const ctx = useActiveChat();
     requestNavigation = ctx.requestNavigation;
+    chatIsLocked = ctx.chatIsLocked;
   } catch {
     // Fora do ActiveChatProvider — usa navegação direta via Link
   }
 
   const handleClick = (e: React.MouseEvent) => {
-    if (requestNavigation) {
+    if (chatIsLocked && requestNavigation) {
       e.preventDefault();
       requestNavigation(href);
     }

@@ -11,17 +11,41 @@ import * as cheerio from 'cheerio';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ORQUESTRADOR: recebe o batch, executa o RelevanceGate e faz fan-out
-// 1 evento por artigo → processamento paralelo real (não mais serial).
-// ─────────────────────────────────────────────────────────────────────────────
 export const processArticlesBatch = inngest.createFunction(
   {
     id: 'process-articles-batch',
     retries: 2,
     // Orquestrador recebe no máximo N batches simultâneos; o trabalho pesado
     // fica no processSingleArticle que tem seus próprios limites por user_id.
-    // Self-Hosted Inngest: sem limites do plano Free, subimos pra 50.
-    concurrency: { limit: 50 },
+    // Self-Hosted Inngest: sem limites do plano Free, subimos pra 100.
+    concurrency: { limit: 100 },
     cancelOn: [{ event: 'app/search.cancelled', match: 'data.query_id' }],
+    // onFailure: disparado quando o batch ORQUESTRADOR esgota retries.
+    // Marca todos os artigos ainda pendentes como failed e encerra a query.
+    onFailure: async ({ event, step }) => {
+      const { query_id } = (event.data as { event: { data: { query_id: string } } }).event.data;
+      await step.run('batch-failure-cleanup', async () => {
+        logger.error(`[Inngest] ☠️ Orquestrador falhou permanentemente | query_id=${query_id}`);
+        await db
+          .update(articles)
+          .set({ status: 'failed' })
+          .where(
+            and(
+              eq(articles.queryId, query_id),
+              notInArray(articles.status, ['done', 'abstract_only', 'failed'])
+            )
+          );
+        await db
+          .update(searchQueries)
+          .set({ status: 'needs_refinement' })
+          .where(
+            and(
+              eq(searchQueries.id, query_id),
+              notInArray(searchQueries.status, ['done', 'cancelled', 'needs_refinement'])
+            )
+          );
+      });
+    },
   },
   { event: 'app/process.articles.batch' },
   async ({ event, step }) => {
@@ -185,19 +209,35 @@ export const processArticlesBatch = inngest.createFunction(
 // WORKER POR ARTIGO: pipeline completo de um único artigo.
 // Roda em paralelo com todos os outros artigos da mesma query.
 // concurrency[0]: limite global no python-worker (recurso CPU compartilhado)
-// concurrency[1]: limite por user_id — evita noisy-neighbor entre usuários
-// ─────────────────────────────────────────────────────────────────────────────
 export const processSingleArticle = inngest.createFunction(
   {
     id: 'process-single-article',
-    retries: 2,
+    retries: 3,
     concurrency: [
-      // Self-Hosted Inngest: limite aumentado para Python worker, que agora aguenta mais.
-      { scope: 'account', key: '"python-worker"', limit: 20 },
-      // Cada usuário processa no máximo 4 artigos ao mesmo tempo (fairness)
-      { scope: 'fn', key: 'event.data.user_id', limit: 4 },
+      // Alinhado com a nova infraestrutura self-hosted, limitamos globalmente
+      // a 30 tarefas pesadas em paralelo, o que ainda é bem acima do tier "Free".
+      { scope: 'account', key: '"python-worker"', limit: 30 },
+      // Cada usuário processa no máximo 10 artigos ao mesmo tempo (fairness entre usuários)
+      { scope: 'fn', key: 'event.data.user_id', limit: 10 },
     ],
     cancelOn: [{ event: 'app/search.cancelled', match: 'data.query_id' }],
+    // onFailure: disparado quando O PRÓPRIO RUN esgota retries (Inngest marca como Failed).
+    // Sem isso, artigos ficam presos em 'pending'/'extracting' para sempre e o
+    // frontend fica em 'Processando...' indefinidamente.
+    onFailure: async ({ event, step }) => {
+      const original = (event.data as { event: { data: { article_id: string; query_id: string } } }).event.data;
+      await step.run('failure-mark-article-and-check-query', async () => {
+        logger.error(
+          `[Inngest] ☠️ Run esgotou retries | article=${original.article_id} | query=${original.query_id}`
+        );
+        await db
+          .update(articles)
+          .set({ status: 'failed' })
+          .where(eq(articles.id, original.article_id));
+        // Verifica se todos os outros já terminaram — marca query done se sim
+        await _checkAndMarkQueryDone(original.query_id);
+      });
+    },
   },
   { event: 'app/process.single.article' },
   async ({ event, step }) => {
@@ -330,21 +370,30 @@ export const processSingleArticle = inngest.createFunction(
       }
 
       // ── STEP 2.5: Semantic Scholar — Grafo de Citações ───────────────────
-      // Fase 6 (P-seguinte): busca referências (backward) e citações (forward)
-      // via Semantic Scholar API (gratuita, sem chave de API).
+      // Busca referências (backward) e citações (forward) via Semantic Scholar API.
       // Armazena JSONB em citation_graph: { references, citations, fetched_at }.
-      // Rate limit sem chave: ~1 req/seg. Concurrency=4 por usuário → até 4 artigos
-      // chegam ao step simultaneamente → jitter largo (0–20s) distribui os requests;
-      // retries usam esperas longas (30s/60s/90s) para evitar burst sincronizado.
+      // Rate limit com chave: 1 req/seg cumulativo. Concurrency=4 por usuário → até 4
+      // artigos chegam ao step; jitter (0–8s) distribui os requests para evitar burst;
+      // retries usam esperas curtas (2s/5s/10s) pois 429 com chave é raro e rápido.
       if (scrapeResult?.doi && process.env.SEMANTIC_SCHOLAR_API_KEY) {
         await step.run(`semantic-scholar-graph-${article.id}`, async () => {
           const doi = scrapeResult.doi!;
-          const jitterMs = Math.floor(Math.random() * 20_000); // 0–20s
+          const jitterMs = Math.floor(Math.random() * 8_000); // 0–8s (API key: limit conhecido, 429 raro)
           await new Promise((r) => setTimeout(r, jitterMs));
 
+          // Encoding correto para DOI no path do S2:
+          // encodeURIComponent("/") = "%2F" → S2 não reconhece e retorna 400.
+          // Solução: codifica cada segmento separado por "/" e une com "/" literal,
+          // replicando o formato da doc: /paper/DOI:10.18653/v1/N18-3011
+          const safeDoi = doi.split('/').map((seg) => encodeURIComponent(seg)).join('/');
+          // Campos validados contra a API real em 13/03/2026:
+          // - citations.contexts e citations.intents NÃO existem como sub-campos (causam 400)
+          // - authors.name DEVE ser explicitado ao usar sub-campos; caso contrário S2 omite o nome
           const ssUrl =
-            `https://api.semanticscholar.org/graph/v1/paper/DOI:${encodeURIComponent(doi)}` +
-            `?fields=references.title,references.externalIds,citations.title,citations.externalIds,citations.contexts,citations.intents,tldr,authors,authors.hIndex,authors.citationCount`;
+            `https://api.semanticscholar.org/graph/v1/paper/DOI:${safeDoi}` +
+            `?fields=references.title,references.externalIds,citations.title,citations.externalIds,` +
+            `tldr,authors.name,authors.hIndex,authors.citationCount,` +
+            `abstract,openAccessPdf,publicationDate,year,fieldsOfStudy,citationCount,influentialCitationCount`;
 
           const MAX_RETRIES = 3;
           // Waits mais curtos pois usamos API Key, 429 agora é raro e dura poucos segundos
@@ -388,9 +437,17 @@ export const processSingleArticle = inngest.createFunction(
             }
 
             if (!response.ok) {
-              logger.warn(
-                `[Inngest] ⚠️ SemanticScholar HTTP ${response.status} | doi=${doi} | article=${article.id}`
-              );
+              // Loga o body do erro para facilitar diagnóstico (400 = URL malformada, 404 = paper não indexado)
+              try {
+                const errBody = await response.text();
+                logger.warn(
+                  `[Inngest] ⚠️ SemanticScholar HTTP ${response.status} | doi=${doi} | body=${errBody.slice(0, 200)} | article=${article.id}`
+                );
+              } catch {
+                logger.warn(
+                  `[Inngest] ⚠️ SemanticScholar HTTP ${response.status} | doi=${doi} | article=${article.id}`
+                );
+              }
               return;
             }
 
@@ -406,11 +463,16 @@ export const processSingleArticle = inngest.createFunction(
               citations?: {
                 title?: string;
                 externalIds?: { DOI?: string };
-                contexts?: string[];
-                intents?: string[];
               }[];
               tldr?: { text?: string };
               authors?: { name?: string; hIndex?: number; citationCount?: number }[];
+              abstract?: string;
+              openAccessPdf?: { url?: string } | null;
+              publicationDate?: string | null;
+              year?: number | null;
+              fieldsOfStudy?: string[] | null;
+              citationCount?: number | null;
+              influentialCitationCount?: number | null;
             };
             const mapReference = (p: { title?: string; externalIds?: { DOI?: string } }) => ({
               title: p.title ?? null,
@@ -419,21 +481,24 @@ export const processSingleArticle = inngest.createFunction(
             const mapCitation = (p: {
               title?: string;
               externalIds?: { DOI?: string };
-              contexts?: string[];
-              intents?: string[];
             }) => ({
               title: p.title ?? null,
               doi: p.externalIds?.DOI ?? null,
-              ...(p.contexts && p.contexts.length > 0 ? { contexts: p.contexts } : {}),
-              ...(p.intents && p.intents.length > 0 ? { intents: p.intents } : {}),
             });
             const citationGraph = {
               references: (data.references ?? []).map(mapReference),
               citations: (data.citations ?? []).map(mapCitation),
               fetched_at: new Date().toISOString(),
+              // Informações extra do paper principal (salvas no graph para fácil acesso)
+              open_access_pdf: data.openAccessPdf?.url ?? null,
+              fields_of_study: data.fieldsOfStudy ?? null,
+              influential_citation_count: data.influentialCitationCount ?? null,
             };
 
             const tldrText = data.tldr?.text?.trim() || undefined;
+            const s2Abstract = data.abstract?.trim() || undefined;
+            const s2CitationCount = data.citationCount ?? undefined;
+            const s2Year = data.year ?? undefined;
 
             const authorsStr =
               data.authors
@@ -454,11 +519,16 @@ export const processSingleArticle = inngest.createFunction(
                 citationGraph,
                 ...(tldrText ? { tldrContent: tldrText } : {}),
                 ...(authorsStr ? { authors: authorsStr } : {}),
+                // Preenche campos que possam ter faltado nas etapas anteriores (scrape/CrossRef)
+                ...(s2Abstract ? { abstract: s2Abstract } : {}),
+                ...(s2CitationCount !== undefined ? { citationCount: s2CitationCount } : {}),
+                ...(s2Year ? { publicationYear: s2Year } : {}),
+                ...(data.openAccessPdf?.url ? { isOpenAccess: true } : {}),
               })
               .where(eq(articles.id, article.id));
 
             logger.log(
-              `[Inngest] 📚 SemanticScholar OK | refs=${citationGraph.references.length} | cites=${citationGraph.citations.length} | tldr=${!!tldrText} | article=${article.id}`
+              `[Inngest] 📚 SemanticScholar OK | refs=${citationGraph.references.length} | cites=${citationGraph.citations.length} | tldr=${!!tldrText} | oa=${!!data.openAccessPdf?.url} | article=${article.id}`
             );
           } catch (err) {
             logger.warn(
@@ -749,10 +819,28 @@ export const processSingleArticle = inngest.createFunction(
           .from(articles)
           .where(eq(articles.id, article.id));
 
-        // Fase 1: S2 TL;DR Native Integration
+        // Fase 1: S2 TL;DR Native Integration — com tradução para PT-BR.
+        // O S2 gera TL;DRs sempre em inglês; traduzimos antes de armazenar.
         if (enriched?.tldrContent && enriched.tldrContent.length > 10) {
-          logger.log(`[Inngest] ⚡ TL;DR nativo via Semantic Scholar | article=${article.id}`);
-          return enriched.tldrContent;
+          logger.log(`[Inngest] ⚡ TL;DR nativo S2 — traduzindo para PT-BR | article=${article.id}`);
+          try {
+            const { text: translated } = await generateText({
+              model: getModelForTask('tldr'),
+              abortSignal: AbortSignal.timeout(20_000),
+              system:
+                'Você é um tradutor acadêmico preciso. Traduza o texto fornecido para Português do Brasil, ' +
+                'mantendo o formato exato (emojis, estrutura de linhas, siglas técnicas). ' +
+                'Retorne APENAS o texto traduzido, sem introduções ou explicações.',
+              prompt: enriched.tldrContent,
+            });
+            logger.log(`[Inngest] ✅ TL;DR S2 traduzido | ${translated.length} chars | article=${article.id}`);
+            return translated;
+          } catch (translationErr) {
+            logger.warn(
+              `[Inngest] ⚠️ Tradução S2 TL;DR falhou, usando em inglês | article=${article.id}: ${(translationErr as Error).message}`
+            );
+            return enriched.tldrContent; // fallback: inglês é melhor que nada
+          }
         }
 
         const contextPrefix = [

@@ -101,8 +101,6 @@ export function ChatView({
     isSearchRunning,
     isSynthesisRunning,
     realtimeStatus,
-    suggestionChips,
-    clearSuggestionChips,
     // P-StatusBar: status da query ativa no DB (done/needs_refinement/processing/etc.)
     queryStatus,
   } = orchestration;
@@ -194,23 +192,19 @@ export function ChatView({
       // Fase C (segurança): strip do prefixo reservado [SISTEMA] — previne injeção de instruções
       const safeText = input.replace(/^\[SISTEMA\]/gi, '').trim();
       if (!safeText) return;
-      clearSuggestionChips();
       sendMessage({ text: safeText });
       setInput('');
       attachments.clearChips();
     },
-    [authStatus, input, onShowLoginModal, sendMessage, clearSuggestionChips, attachments]
+    [authStatus, input, onShowLoginModal, sendMessage, attachments]
   );
-
-  // ── Chips de sugestão rápida ─────────────────────────────────────────────
-  const chipsList = useMemo(() => suggestionChips ?? [], [suggestionChips]);
 
   // Fase 3 (P-UI): jornada unificada de busca — agrega proposals de todas as mensagens
   const searchJourney = useMemo<SearchAttempt[]>(() => {
     const result: SearchAttempt[] = [];
     for (const msg of displayMessages) {
       if (msg.role !== 'assistant') continue;
-      const parts = (msg.parts ?? []) as any[];
+      const parts = msg.parts ?? [];
       for (const part of parts) {
         if (!isToolOrDynamicToolUIPart(part)) continue;
         const toolName = getToolOrDynamicToolName(part);
@@ -221,12 +215,16 @@ export function ChatView({
           continue;
         const { state } = part;
         if (!['output-available', 'input-available', 'input-streaming'].includes(state)) continue;
-        const output = (part as any).output as Record<string, any> | undefined;
-        const input = (part as any).input as Record<string, any> | undefined;
+        const output = ('output' in part ? part.output : undefined) as
+          | Record<string, unknown>
+          | undefined;
+        const input = ('input' in part ? part.input : undefined) as
+          | Record<string, unknown>
+          | undefined;
         if (toolName === 'propose_search_sol_database') {
-          const queries: string[] | undefined = output?.queries ?? input?.queries;
+          const queries = (output?.queries ?? input?.queries) as string[] | undefined;
           if (!queries?.length) continue;
-          const queryId: string | undefined = output?.query_id;
+          const queryId = output?.query_id as string | undefined;
           result.push({
             type: 'sol',
             toolCallId: part.toolCallId,
@@ -236,9 +234,9 @@ export function ChatView({
             isRunning: queryId ? (runningSearches?.has(queryId) ?? false) : false,
           });
         } else {
-          const query: string | undefined = output?.query ?? input?.query;
+          const query = (output?.query ?? input?.query) as string | undefined;
           if (!query) continue;
-          const queryId: string | undefined = output?.query_id;
+          const queryId = output?.query_id as string | undefined;
           result.push({
             type: 'global',
             toolCallId: part.toolCallId,
@@ -252,7 +250,6 @@ export function ChatView({
     }
     return result;
   }, [displayMessages, executedProposalIds, runningSearches]);
-  const handleSuggestionClick = useCallback((text: string) => setInput(text), []);
 
   // ── Navegação no histórico de queries ────────────────────────────────────
   const handleSelectQuery = useCallback((queryId: string) => {
@@ -352,8 +349,6 @@ export function ChatView({
                 onSubmit={handleSubmit}
                 showAbortButton={isLoading}
                 onAbort={stop}
-                suggestionChips={chipsList}
-                onSuggestionClick={handleSuggestionClick}
                 attachments={attachments}
                 analysisMode={analysisMode}
                 onAnalysisModeChange={onAnalysisModeChange}

@@ -27,32 +27,8 @@ import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
 import { supabase } from '@/lib/supabase';
 import { rankArticles, type Article } from '@/lib/reranking';
 
-// Fase 3 (P-chips): chips de sugestão rápida exibidos no input quando needs_refinement
-export type SuggestionChip = { label: string; icon: string; message: string };
-
 // Fase C (IA-04): modo de síntese selecionável pelo usuário
 export type SynthesisMode = 'auto' | 'quick' | 'systematic';
-
-// Chips de override manual — a IA já tenta o próximo passo automaticamente,
-// mas o usuário pode forçar uma estratégia específica clicando nos chips.
-const NEEDS_REFINEMENT_CHIPS: SuggestionChip[] = [
-  {
-    label: 'Forçar nova busca SOL',
-    icon: '🔍',
-    message:
-      'Proponha uma nova busca na base SOL com termos mais amplos e abrangentes do que os anteriores',
-  },
-  {
-    label: 'Ir direto ao OpenAlex',
-    icon: '🌐',
-    message: 'Proponha agora uma busca na base global OpenAlex para ampliar o corpus',
-  },
-  {
-    label: 'Redefinir abordagem',
-    icon: '🔄',
-    message: 'Vamos repensar a abordagem da pesquisa e definir um novo ângulo',
-  },
-];
 
 // ── Helpers internos ──────────────────────────────────────────────────────────
 
@@ -90,7 +66,6 @@ interface UseChatOrchestrationOptions {
 export function useChatOrchestration({
   urlQueryId,
   initialMessages,
-  authStatus,
   modelId,
   searchLimitOverride,
   initialSynthesisMode = 'auto',
@@ -198,9 +173,7 @@ export function useChatOrchestration({
 
   const [runningSearches, setRunningSearches] = useState<Set<string>>(new Set());
   const [zeroResultSearches, setZeroResultSearches] = useState<Set<string>>(new Set());
-  // Fase 3 (P-chips): chips de ação rápida exibidos no input após needs_refinement
-  const [suggestionChips, setSuggestionChips] = useState<SuggestionChip[] | null>(null);
-  const clearSuggestionChips = useCallback(() => setSuggestionChips(null), []);
+
   /**
    * Fase C (IA-04) — Automação de fallback de busca.
    * Conta quantas vezes a busca falhou (needs_refinement) nesta sessão.
@@ -225,8 +198,6 @@ export function useChatOrchestration({
   const handleExecuteSearch = useCallback(
     async (queries: string[], qId: string, isGlobal = false) => {
       // P-01: URL permanece em /workspace/chat/[chatId] — queryId não vai para a URL
-      // Fase 3 (P-chips): nova busca iniciada → descarta chips anteriores
-      setSuggestionChips(null);
       setSessionQueryId(qId);
       sessionQueryIdRef.current = qId; // Fase C: sincroniza ref imediatamente — elimina setTimeout(300)
       setLocalExecutedIds((prev) => new Set(prev).add(qId));
@@ -295,7 +266,6 @@ export function useChatOrchestration({
             solSearchFailureCountRef.current += 1;
           }
           const failCount = solSearchFailureCountRef.current;
-          setSuggestionChips(NEEDS_REFINEMENT_CHIPS);
 
           // Fase C: ref já sincronizada acima — chamada direta sem setTimeout
           if (failCount === 1) {
@@ -685,23 +655,66 @@ export function useChatOrchestration({
   }, [messages]);
 
   const reviewRankedIds = useMemo<string[] | null>(() => {
+    if (!activeQueryId) return null;
+
+    // 1. Locate the exact message index where the active query was proposed.
+    // This establishes a boundary so we don't pick up stale synthesis rankings
+    // from prior queries in the chat history.
+    let activeQueryIndex = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
-      // 1. Tenta parts
+      let found = false;
+      for (const part of msg.parts ?? []) {
+        if (!isToolOrDynamicToolUIPart(part)) continue;
+        const name = getToolOrDynamicToolName(part);
+        if (name === 'propose_search_sol_database' || name === 'propose_search_global_database') {
+          const out = normalizeToolOutput((part as any).output);
+          if (out?.success && out.query_id === activeQueryId) {
+            found = true;
+            break;
+          }
+        }
+      }
+      if (!found) {
+        const msgObj = msg as unknown as { toolInvocations?: any[] };
+        for (const inv of msgObj.toolInvocations ?? []) {
+          if (
+            inv.toolName === 'propose_search_sol_database' ||
+            inv.toolName === 'propose_search_global_database'
+          ) {
+            if (inv.result?.success && inv.result?.query_id === activeQueryId) {
+              found = true;
+              break;
+            }
+          }
+        }
+      }
+      if (found) {
+        activeQueryIndex = i;
+        break;
+      }
+    }
+
+    if (activeQueryIndex === -1) return null;
+
+    // 2. Scan only messages strictly AFTER the proposal for a synthesis generated for this query.
+    for (let i = messages.length - 1; i > activeQueryIndex; i--) {
+      const msg = messages[i];
+      
       for (const part of msg.parts ?? []) {
         if (!isToolOrDynamicToolUIPart(part)) continue;
         if (getToolOrDynamicToolName(part) !== 'generate_systematic_review') continue;
+        if (part.state !== 'output-available') continue;
+        const out = normalizeToolOutput((part as any).output);
         const ids =
-          (part as any).output?.ranked_article_ids ||
+          out?.ranked_article_ids ||
           (part as any).result?.ranked_article_ids ||
-          (part as any).toolInvocation?.result?.ranked_article_ids ||
-          (part as any).toolInvocation?.output?.ranked_article_ids;
+          (part as any).toolInvocation?.result?.ranked_article_ids;
         if (Array.isArray(ids) && ids.length > 0) {
           return ids as string[];
         }
       }
 
-      // 2. Fallback para toolInvocations (formato unificado do AI SDK >= 3.1)
       const msgObj = msg as unknown as {
         toolInvocations?: Array<{ toolName: string; result?: any; output?: any; args?: any }>;
       };
@@ -716,43 +729,51 @@ export function useChatOrchestration({
         }
       }
     }
-    console.log('[DEBUG-RERUN] Nenhum ranked_article_ids encontrado nas mensagens.');
     return null;
-  }, [messages]);
+  }, [messages, activeQueryId]);
 
   const displayArticles = useMemo(() => {
-    const arr = articles?.length
-      ? articles
-      : isSearchRunning && previousArticlesRef.current.length
-        ? previousArticlesRef.current
-        : (articles ?? []);
+    // Queries que foram rejeitadas não devem exibir artigos no painel.
+    // Isso evita mostrar artigos de uma busca que o RelevanceGate reprovou,
+    // ou de uma busca cancelada — que confunde o usuário sobre o estado real.
+    const HIDDEN_STATUSES = new Set(['needs_refinement', 'cancelled', 'failed']);
+    const isQueryHidden =
+      queryStatus !== null &&
+      HIDDEN_STATUSES.has(queryStatus) &&
+      (articles?.length
+        ? articles.every((a) => (a as any).queryId === activeQueryId)
+        : false);
 
-    if (!arr.length) return arr;
+    const rawArr = (() => {
+      if (isQueryHidden) return [];
+      
+      const targetQueryId = activeQueryId ?? previousQueryIdRef.current;
+      if (!targetQueryId) return [];
+      
+      const filtered = articles?.filter(a => (a as any).queryId === targetQueryId) ?? [];
+      if (filtered.length) return filtered;
+      
+      if (isSearchRunning && previousArticlesRef.current.length) return previousArticlesRef.current;
+      return [];
+    })();
+
+    if (!rawArr.length) return rawArr;
 
     // Após síntese: usa a ordem exata do reranker semântico (backend) — P-ranking-sync
     if (reviewRankedIds?.length) {
-      console.log('[DEBUG-RERUN] Sorting using reviewRankedIds:', reviewRankedIds);
       const posMap = new Map(reviewRankedIds.map((id, i) => [id, i]));
-      const sorted = [...arr].sort(
+      return [...rawArr].sort(
         (a, b) => (posMap.get(a.id) ?? Infinity) - (posMap.get(b.id) ?? Infinity)
       );
-      if (sorted.length > 0) {
-        console.log(
-          '[DEBUG-RERUN] First 3 sorted article IDs:',
-          sorted.slice(0, 3).map((a) => a.id)
-        );
-      }
-      return sorted;
     }
 
-    console.log('[DEBUG-RERUN] No reviewRankedIds, fallback to standard rankArticles.');
-    // Antes da síntese: ranking bibliométrico via lib/reranking.ts (DRY — sem fórmula duplicada).
+    // Antes da síntese: ranking bibliométrico via lib/reranking.ts
     // Artigos em processamento (não-terminais) ficam ao final da lista.
     const TERMINAL = ['done', 'abstract_only'];
-    const terminal = arr.filter((a) => TERMINAL.includes(a.status ?? ''));
-    const processing = arr.filter((a) => !TERMINAL.includes(a.status ?? ''));
+    const terminal = rawArr.filter((a) => TERMINAL.includes(a.status ?? ''));
+    const processing = rawArr.filter((a) => !TERMINAL.includes(a.status ?? ''));
     return [...rankArticles(terminal as Article[]), ...processing];
-  }, [articles, isSearchRunning, reviewRankedIds]);
+  }, [articles, isSearchRunning, reviewRankedIds, queryStatus, activeQueryId]);
 
   const panelQueryId =
     articles && articles.length > 0 ? activeQueryId : (previousQueryIdRef.current ?? activeQueryId);
@@ -827,6 +848,8 @@ export function useChatOrchestration({
   const articleCountRef = useRef<any[]>([]);
   // Ref do queryStatus para uso no P-14 timer (closure-safe, sem re-criar o timer)
   const queryStatusRef = useRef<string | null>(null);
+  // Ref para detectar transições de status (impede triggers de chats antigos recarregados)
+  const prevQueryStatusRef = useRef<string | null>(null);
 
   // Cancela uma busca em progresso: actualiza DB via API + para o Inngest job
   const handleCancelSearch = useCallback(async (qId: string) => {
@@ -849,6 +872,7 @@ export function useChatOrchestration({
     }
   }, []);
 
+  // Mantém a compatibilidade com a flag local (só por precaução)
   useEffect(() => {
     if (activeQueryId && typeof window !== 'undefined') {
       if (localStorage.getItem(`sol_review_done_${activeQueryId}`) === 'true') {
@@ -875,16 +899,21 @@ export function useChatOrchestration({
   }, [queryStatus]);
 
   // Dispara síntese ou mensagem de refinamento baseado no status REAL da query no DB.
-  // RAZÃO: o Inngest processa artigos em batches de 3. Quando o batch 1 terminava com
-  //        todos seus artigos prontos, o trigger anterior (via status de artigos no cliente)
-  //        disparava a síntese ANTES do batch 2 começar. Usar searchQueries.status = 'done'
-  //        (setado pelo Inngest apenas após verificar TODOS os batches) garante que a
-  //        síntese só ocorre quando tudo está genuinamente pronto.
+  // Utiliza a transição de status (prev !== null) para garantir que apenas observando o
+  // ciclo de vida ativo na sessão atual disparamos as mensagens. Recarregar um chat antigo
+  // inicializa com null -> 'done', que é rejeitado por prev !== null.
   useEffect(() => {
+    const prevStatus = prevQueryStatusRef.current;
+    prevQueryStatusRef.current = queryStatus;
+
     if (!activeQueryId || !queryStatus) return;
+    
+    // DEV LOG for debugging synthesis triggers
+    console.log(`[DEBUG] queryStatus effect: activeQueryId=${activeQueryId}, queryStatus=${queryStatus}, prevStatus=${prevStatus}, reviewed=${reviewedQueryIdsRef.current.has(activeQueryId)}`);
+
     if (reviewedQueryIdsRef.current.has(activeQueryId)) return;
 
-    if (queryStatus === 'done') {
+    if (queryStatus === 'done' && prevStatus !== 'done' && prevStatus !== null) {
       reviewedQueryIdsRef.current.add(activeQueryId);
       // Fase C (IA-04): busca bem-sucedida — reseta contador de falhas
       solSearchFailureCountRef.current = 0;
@@ -959,7 +988,7 @@ export function useChatOrchestration({
       };
     }
 
-    if (queryStatus === 'needs_refinement') {
+    if (queryStatus === 'needs_refinement' && prevStatus !== 'needs_refinement' && prevStatus !== null) {
       reviewedQueryIdsRef.current.add(activeQueryId);
       // Limpa indicador de busca em progresso
       setRunningSearches((prev) => {
@@ -976,7 +1005,6 @@ export function useChatOrchestration({
         solSearchFailureCountRef.current += 1;
       }
       const failCount = solSearchFailureCountRef.current;
-      setSuggestionChips(NEEDS_REFINEMENT_CHIPS);
       setTimeout(() => {
         if (failCount === 1) {
           // 1ª falha (RelevanceGate rejeitou): AI relança SOL automaticamente
@@ -1071,9 +1099,6 @@ export function useChatOrchestration({
     // Flags
     hasZeroResults,
     isSearchRunning,
-    // Fase 3 (P-chips): chips de ação rápida
-    suggestionChips,
-    clearSuggestionChips,
     // Fase C (IA-04): modo de síntese
     synthesisMode,
     setSynthesisMode,

@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState } from 'react';
 import {
@@ -12,7 +12,7 @@ import {
   SidebarMenu,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { BookOpenText, MessagesSquare, PanelLeftClose, Plus } from 'lucide-react';
+import { BookOpenText, MessagesSquare, PanelLeft, PanelLeftClose, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
@@ -22,7 +22,6 @@ import { useRecentChats } from '@/hooks/useRecentChats';
 import { SIDEBAR_ICON_WIDTH, NAV_ROUTES } from '@/components/sidebar/sidebar.config';
 import { NavItem } from '@/components/sidebar/NavItem';
 import { RecentChatItem, RecentChatsSkeleton } from '@/components/sidebar/RecentChatItem';
-import { SidebarExpandButton } from '@/components/sidebar/SidebarExpandButton';
 import { UserMenuPopover } from '@/components/sidebar/UserMenuPopover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useActiveChat } from '@/contexts/ActiveChatContext';
@@ -37,7 +36,7 @@ export function AppSidebar() {
   const [shareDialogChatId, setShareDialogChatId] = useState<string | null>(null);
 
   // UX-01: guard do "Nova Sessão" — intercepta navegação quando um chat está em andamento
-  const { requestNavigation } = useActiveChat();
+  const { requestNavigation, chatIsLocked } = useActiveChat();
 
   const handleDelete = async (chatId: string) => {
     if (isActive(pathname, `/workspace/chat/${chatId}`)) router.push('/workspace');
@@ -53,13 +52,28 @@ export function AppSidebar() {
         style={{ '--sidebar-width-icon': SIDEBAR_ICON_WIDTH } as React.CSSProperties}
       >
         {/* ── Header ── */}
-        <SidebarHeader className="border-sidebar-border/60 h-14 items-center justify-between border-b px-3">
+        <SidebarHeader className="group/header border-sidebar-border/60 h-14 items-center justify-between border-b px-3">
           <div className="flex h-full w-full items-center gap-2.5 group-data-[collapsible=icon]:justify-center">
-            <Link href="/workspace" className="flex shrink-0 items-center gap-2">
+            <Link href="/workspace" className="flex shrink-0 items-center gap-2 group-data-[collapsible=icon]:group-hover/header:hidden">
               <div className="bg-primary flex size-7 shrink-0 items-center justify-center rounded-lg transition-opacity hover:opacity-90">
                 <BookOpenText size={14} className="text-primary-foreground" />
               </div>
             </Link>
+            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={toggleSidebar}
+                  className="hidden group-data-[collapsible=icon]:group-hover/header:flex bg-background border-border text-foreground/70 hover:bg-accent hover:text-foreground size-7 shrink-0 items-center justify-center rounded-md border shadow-sm transition-colors"
+                  aria-label="Expandir menu"
+                >
+                  <PanelLeft size={14} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>
+                Expandir menu
+              </TooltipContent>
+            </Tooltip>
             <div className="flex min-w-0 flex-1 flex-col leading-none group-data-[collapsible=icon]:hidden">
               <span className="text-sidebar-foreground truncate text-[13px] font-semibold tracking-tight">
                 C.O.R.E. AI
@@ -99,7 +113,7 @@ export function AppSidebar() {
                   <Link
                     href="/workspace"
                     onClick={(e) => {
-                      if (requestNavigation) {
+                      if (chatIsLocked && requestNavigation) {
                         e.preventDefault();
                         requestNavigation('/workspace');
                       }
@@ -185,8 +199,6 @@ export function AppSidebar() {
           <UserMenuPopover />
         </SidebarFooter>
       </Sidebar>
-
-      {state === 'collapsed' && <SidebarExpandButton onExpand={toggleSidebar} />}
 
       {shareDialogChatId && (
         <ShareDialog

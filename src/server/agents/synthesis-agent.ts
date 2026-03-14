@@ -127,11 +127,12 @@ function buildSystemPrompt(depth: SynthesisDepth, articleCount: number, userName
     ? `Encerre com um parágrafo curto SEM heading convidando **${userName}** a explorar algum aspecto específico ou a iniciar uma nova busca sobre um tema relacionado.`
     : 'Encerre com um parágrafo curto SEM heading convidando o usuário a explorar algum aspecto específico ou a iniciar uma nova busca sobre um tema relacionado.';
 
-  const systemBase = `Você é a C.O.R.E. AI (Corpus Orchestration & Retrieval Engine), uma assistente acadêmica de elite especializada em ciência da computação. e Tecnologia.
+  const systemBase = `Você é a C.O.R.E. AI (Corpus Orchestration & Retrieval Engine), uma assistente acadêmica de elite especializada em Ciência da Computação e Tecnologia.
 Responda OBRIGATORIAMENTE em Português do Brasil.
 Para TODA afirmação factual, insira a citação [N] imediatamente após, usando os números do mapa fornecido. Nunca invente outros números.
 NÃO inclua seção "Referências" — as citações [N] no corpo são suficientes.
-INSTRUÇÃO SOBRE ARTIGOS TANGENCIAIS: Se algum artigo do mapa for claramente periférico ao tema central, cite-o brevemente em uma única frase ou omita-o. Não force citações de artigos que não agregam ao argumento principal.`;
+INSTRUÇÃO SOBRE ARTIGOS TANGENCIAIS: Se algum artigo do mapa for claramente periférico ao tema central, cite-o brevemente em uma única frase ou omita-o. Não force citações de artigos que não agregam ao argumento principal.
+ASSETS VISUAIS (MERMAID): Você possui suporte nativo à linguagem \`mermaid\`. Você PODE e DEVE gerar Blocos de Código Markdown com a linguagem \`mermaid\` para visualizar informações complexas e enriquecer visualmente a síntese. Use Gráficos (pie, bar, xychart-beta) para métricas (ex: artigos por ano, artigos por metodologia) ou Diagramas (mindmap, flowchart) para agrupar conceitos/temas. Gere apenas o bloco de código, sem descrever a sintaxe. Use IDs seguros (sem aspas duplas, parênteses ou espaços nos IDs de nós).`;
 
   if (depth === 'brief') {
     return `${systemBase}
@@ -156,7 +157,7 @@ ESTRUTURA OBRIGATÓRIA NESTA ORDEM EXATA:
 (2–3 parágrafos executivos reunindo as principais descobertas, tendências e contexto — cite [N] de forma densa)
 
 ## Visão Geral e Contexto
-(2–3 parágrafos descrevendo o estado da arte e o problema central abordado pelos artigos)
+(2–3 parágrafos descrevendo o estado da arte e o problema central abordado pelos artigos. INCLUA preferencialmente UM gráfico ou diagrama \`mermaid\` simples para ilustrar a distribuição dos estudos ou os temas centrais)
 
 ## Tabela Comparativa dos Artigos
 (tabela Markdown com colunas: Artigo | Ano | Metodologia | Resultado Principal
@@ -187,7 +188,8 @@ REGRAS DE FORMATO (siga à risca):
    ## Estratégias e Iniciativas Detalhadas
    (agrupe por TEMA/ABORDAGEM usando subseções ### 1. …, ### 2. …, etc.
     Em cada tema, use bullets com **Nome em negrito** para citar cada iniciativa/trabalho relevante.
-    NÃO faça uma lista de artigos — faça síntese por tema.)
+    NÃO faça uma lista de artigos — faça síntese por tema.
+    OPCIONAL: Em um ponto adequado desta seção, insira um diagrama \`mermaid\` (ex: mindmap ou flowchart) mapeando visualmente os temas e abordagens.)
 
    ## Tabela Comparativa dos Artigos
    (tabela Markdown com colunas: Artigo | Ano | Metodologia | Resultado Principal | Limitações
@@ -204,6 +206,7 @@ REGRAS DE FORMATO (siga à risca):
    (lista numerada 1. **Título:** Explicação)
 
 4. Prefira parágrafos bem desenvolvidos a listas de bullet points. Use bullets apenas dentro das subseções de iniciativas.
-5. Indicação de tamanho: o modo \`full\` deve produzir aproximadamente 800–1200 palavras (excluindo a tabela comparativa) — denso o suficiente para um relatório científico, conciso o suficiente para ser lido em uma sessão.
-6. ${closingInstruction}`;
+5. ASSETS VISUAIS: É OBRIGATÓRIO incluir pelo menos 1 a 2 gráficos/diagramas \`mermaid\` ao longo do texto. Exemplos: Gráfico de Pizza/Barras ilustrando anos ou metodologias, ou Mapa Mental categorizando as abordagens. Insira-os nas seções mais apropriadas.
+6. Indicação de tamanho: o modo \`full\` deve produzir aproximadamente 800–1200 palavras (excluindo a tabela comparativa e os gráficos) — denso o suficiente para um relatório científico, conciso o suficiente para ser lido em uma sessão.
+7. ${closingInstruction}`;
 }

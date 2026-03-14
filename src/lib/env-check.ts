@@ -19,6 +19,15 @@ const PROD_ONLY_ENV_VARS: string[] = ['INNGEST_SIGNING_KEY', 'INNGEST_EVENT_KEY'
 
 /** Executa a validação. Chame uma vez no startup (ex: src/app/layout.tsx ou route handler). */
 export function checkRequiredEnvVars(): void {
+  // Skip validation during builds
+  if (
+    process.env.SKIP_ENV_VALIDATION === '1' ||
+    process.env.SKIP_ENV_VALIDATION === 'true' ||
+    process.env.npm_lifecycle_event === 'build'
+  ) {
+    return;
+  }
+
   const isProduction = process.env.NODE_ENV === 'production';
 
   const missing = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);

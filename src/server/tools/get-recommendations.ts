@@ -3,12 +3,13 @@
  * Implementa a integração com a S2 Recommendations API (Phase 2).
  */
 
-import { tool } from 'ai';
+import { tool, generateText } from 'ai';
 import { z } from 'zod';
 import { db } from '@/server/db';
 import { articles, searchQueries } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { logger } from '@/lib/logger';
+import { getModelForTask } from '@/lib/ai-provider';
 import type { ToolContext } from './propose-search';
 
 const recommendationsSchema = z.object({
@@ -104,7 +105,20 @@ export function buildGetRecommendationsTool(ctx: ToolContext) {
               })
               .join(', ') || 'Desconhecido';
 
-          const tldrText = paper.tldr?.text?.trim() || null;
+          let tldrText = paper.tldr?.text?.trim() || null;
+
+          if (tldrText) {
+            try {
+              const { text } = await generateText({
+                model: getModelForTask('tldr'),
+                system: 'Você é um tradutor especializado em textos acadêmicos.',
+                prompt: `Traduza o seguinte TL;DR científico para o Português do Brasil de forma clara e concisa. Retorne APENAS o texto traduzido, sem aspas ou introduções:\n\n${tldrText}`,
+              });
+              tldrText = text.trim();
+            } catch (err) {
+              logger.warn(`[Tool] Falha ao traduzir TLDR para DOI ${recDoi}:`, err);
+            }
+          }
 
           const [inserted] = await db
             .insert(articles)
