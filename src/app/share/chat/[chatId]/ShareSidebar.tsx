@@ -8,6 +8,7 @@ import {
   User,
   Library,
   ChevronsDown,
+  X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import ReactMarkdown from 'react-markdown';
@@ -45,63 +46,135 @@ type Panel = 'acervo' | 'chat';
 export function ShareSidebar({ articles, messages }: ShareSidebarProps) {
   const [activePanel, setActivePanel] = useState<Panel | null>(null);
 
-  const toggle = (panel: Panel) => {
+  const toggle = (panel: Panel) =>
     setActivePanel((prev) => (prev === panel ? null : panel));
-  };
 
+  const close = () => setActivePanel(null);
   const isExpanded = activePanel !== null;
 
+  const panelLabel = activePanel === 'acervo' ? 'Acervo' : 'Chat';
+  const panelCount = activePanel === 'acervo' ? articles.length : messages.length;
+
   return (
-    <div
-      className="relative flex h-full shrink-0 border-l border-border bg-background transition-[width] duration-300 ease-in-out"
-      style={{ width: isExpanded ? 580 : 48 }}
-    >
-      {/* ── Icon strip (always visible) ─────────────────────────────────── */}
-      <div className="flex w-12 shrink-0 flex-col items-center gap-1 pt-3">
-        <IconTab
-          label="Acervo"
-          count={articles.length}
-          icon={<BookOpen className="size-4" />}
-          active={activePanel === 'acervo'}
-          onClick={() => toggle('acervo')}
-        />
-        <IconTab
-          label="Chat"
-          count={messages.length}
-          icon={<MessageSquare className="size-4" />}
-          active={activePanel === 'chat'}
-          onClick={() => toggle('chat')}
-        />
+    <>
+      {/* ── DESKTOP: inline collapsible side panel ──────────────────────── */}
+      <div
+        className="relative hidden h-full shrink-0 flex-row border-l border-border bg-background transition-[width] duration-300 ease-in-out md:flex"
+        style={{ width: isExpanded ? 580 : 48 }}
+      >
+        {/* Icon strip */}
+        <div className="flex w-12 shrink-0 flex-col items-center gap-1 pt-3">
+          <IconTab
+            label="Acervo"
+            count={articles.length}
+            icon={<BookOpen className="size-4" />}
+            active={activePanel === 'acervo'}
+            onClick={() => toggle('acervo')}
+          />
+          <IconTab
+            label="Chat"
+            count={messages.length}
+            icon={<MessageSquare className="size-4" />}
+            active={activePanel === 'chat'}
+            onClick={() => toggle('chat')}
+          />
+        </div>
+
+        {/* Expanded content */}
+        {isExpanded && (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-l border-border">
+            <PanelHeader label={panelLabel} count={panelCount} onClose={close} />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {activePanel === 'acervo' ? (
+                <AcervoPanel articles={articles} />
+              ) : (
+                <ChatPanel messages={messages} />
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ── Expanded panel ──────────────────────────────────────────────── */}
-      {isExpanded && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-l border-border">
-          {/* Panel label header */}
-          <div className="flex h-10 shrink-0 items-center border-b border-border px-4">
-            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              {activePanel === 'acervo' ? 'Acervo' : 'Chat'}
-            </span>
-            <Badge variant="secondary" className="ml-2 h-4 px-1.5 text-[10px] tabular-nums">
-              {activePanel === 'acervo' ? articles.length : messages.length}
-            </Badge>
-          </div>
-
-          {/* Scrollable panel content */}
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {activePanel === 'acervo' ? (
-              <AcervoPanel articles={articles} />
-            ) : (
-              <ChatPanel messages={messages} />
-            )}
-          </div>
+      {/* ── MOBILE: fixed bottom bar + overlay sheet ─────────────────────── */}
+      <div className="md:hidden">
+        {/* Bottom icon bar */}
+        <div className="fixed bottom-0 left-0 right-0 z-40 flex h-14 items-center justify-around border-t border-border bg-background/95 backdrop-blur-sm">
+          <MobileTab
+            label="Acervo"
+            count={articles.length}
+            icon={<BookOpen className="size-5" />}
+            active={activePanel === 'acervo'}
+            onClick={() => toggle('acervo')}
+          />
+          <MobileTab
+            label="Chat"
+            count={messages.length}
+            icon={<MessageSquare className="size-5" />}
+            active={activePanel === 'chat'}
+            onClick={() => toggle('chat')}
+          />
         </div>
-      )}
+
+        {/* Sheet overlay */}
+        {isExpanded && (
+          <>
+            {/* Backdrop */}
+            <div
+              className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px]"
+              onClick={close}
+            />
+            {/* Slide-up panel */}
+            <div className="fixed bottom-14 left-0 right-0 z-50 flex max-h-[75vh] flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl">
+              <PanelHeader label={panelLabel} count={panelCount} onClose={close} />
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {activePanel === 'acervo' ? (
+                  <AcervoPanel articles={articles} />
+                ) : (
+                  <ChatPanel messages={messages} />
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Bottom padding so main content isn't hidden by the bar */}
+        <div className="h-14" />
+      </div>
+    </>
+  );
+}
+
+// ── Panel Header with close button ───────────────────────────────────────────
+
+function PanelHeader({
+  label,
+  count,
+  onClose,
+}: {
+  label: string;
+  count: number;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex h-10 shrink-0 items-center border-b border-border px-4">
+      <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+        {label}
+      </span>
+      <Badge variant="secondary" className="ml-2 h-4 px-1.5 text-[10px] tabular-nums">
+        {count}
+      </Badge>
+      <button
+        onClick={onClose}
+        title="Fechar"
+        className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+      >
+        <X className="size-3.5" />
+      </button>
     </div>
   );
 }
 
-// ── Icon Tab ──────────────────────────────────────────────────────────────────
+// ── Desktop icon tab ──────────────────────────────────────────────────────────
 
 function IconTab({
   label,
@@ -134,6 +207,45 @@ function IconTab({
             active
               ? 'bg-primary text-primary-foreground'
               : 'bg-muted-foreground/20 text-muted-foreground'
+          }`}
+        >
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ── Mobile tab (bottom bar) ───────────────────────────────────────────────────
+
+function MobileTab({
+  label,
+  count,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  icon: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`relative flex flex-col items-center gap-1 px-6 py-1 text-[10px] font-semibold transition-colors ${
+        active ? 'text-primary' : 'text-muted-foreground'
+      }`}
+    >
+      {icon}
+      <span>{label}</span>
+      {count > 0 && (
+        <span
+          className={`absolute top-1 right-4 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold ${
+            active
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted-foreground/30 text-muted-foreground'
           }`}
         >
           {count > 99 ? '99+' : count}
@@ -179,7 +291,6 @@ function AcervoPanel({ articles }: { articles: SidebarArticle[] }) {
               ) : (
                 <p className="line-clamp-2 text-[13px] font-medium leading-snug">{article.title}</p>
               )}
-
               <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                 {article.authors && (
                   <span className="max-w-[200px] truncate">
@@ -201,7 +312,6 @@ function AcervoPanel({ articles }: { articles: SidebarArticle[] }) {
                   </Badge>
                 )}
               </div>
-
               {article.tldrContent && (
                 <p className="line-clamp-3 text-[11px] leading-relaxed text-muted-foreground">
                   {article.tldrContent}
@@ -215,7 +325,7 @@ function AcervoPanel({ articles }: { articles: SidebarArticle[] }) {
   );
 }
 
-// ── Chat Panel (with scroll-to-bottom button) ─────────────────────────────────
+// ── Chat Panel ────────────────────────────────────────────────────────────────
 
 function ChatPanel({ messages }: { messages: SidebarMessage[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -229,14 +339,12 @@ function ChatPanel({ messages }: { messages: SidebarMessage[] }) {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => {
+    const onScroll = () =>
       setShowScroll(el.scrollHeight - el.scrollTop - el.clientHeight > 150);
-    };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Scroll to bottom on first render
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -264,8 +372,6 @@ function ChatPanel({ messages }: { messages: SidebarMessage[] }) {
           )}
         </div>
       </div>
-
-      {/* Scroll to bottom button */}
       {showScroll && (
         <button
           onClick={scrollToBottom}
@@ -304,7 +410,6 @@ function AssistantBubble({ text }: { text: string }) {
         <span className="mb-1.5 block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
           C.O.R.E.
         </span>
-        {/* Full markdown rendering — matches ChatMessageItem */}
         <div className="prose prose-sm dark:prose-invert max-w-none font-sans text-[14px] leading-relaxed [&_h1]:mb-3 [&_h1]:mt-2 [&_h1]:text-[15px] [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-[14px] [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:text-[13.5px] [&_h3]:font-semibold [&_li]:my-0.5 [&_li]:text-[14px] [&_ol]:my-1.5 [&_ol]:ml-4 [&_p]:my-2 [&_p]:text-[14px] [&_strong]:font-semibold [&_ul]:my-1.5 [&_ul]:ml-4">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -312,12 +417,8 @@ function AssistantBubble({ text }: { text: string }) {
               code({ className, children }) {
                 const lang = className?.replace('language-', '') ?? '';
                 const codeStr = String(children).replace(/\n$/, '');
-                if (lang === 'mermaid') {
-                  return <MermaidBlock code={codeStr} />;
-                }
-                if (lang) {
-                  return <CodeBlock code={codeStr} language={lang} />;
-                }
+                if (lang === 'mermaid') return <MermaidBlock code={codeStr} />;
+                if (lang) return <CodeBlock code={codeStr} language={lang} />;
                 return (
                   <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12px]">
                     {children}
@@ -331,37 +432,24 @@ function AssistantBubble({ text }: { text: string }) {
                   </div>
                 );
               },
-              thead({ children }) {
-                return <thead className="bg-muted/40">{children}</thead>;
-              },
-              th({ children }) {
-                return (
-                  <th className="px-4 py-2 text-left text-[11px] font-bold uppercase tracking-tight text-muted-foreground">
-                    {children}
-                  </th>
-                );
-              },
-              td({ children }) {
-                return (
-                  <td className="px-4 py-2 text-[13px] text-foreground/80">{children}</td>
-                );
-              },
-              blockquote({ children }) {
-                return (
-                  <blockquote className="my-3 border-l-2 border-primary/30 pl-4 italic text-foreground/70">
-                    {children}
-                  </blockquote>
-                );
-              },
+              thead: ({ children }) => <thead className="bg-muted/40">{children}</thead>,
+              th: ({ children }) => (
+                <th className="px-4 py-2 text-left text-[11px] font-bold uppercase tracking-tight text-muted-foreground">
+                  {children}
+                </th>
+              ),
+              td: ({ children }) => (
+                <td className="px-4 py-2 text-[13px] text-foreground/80">{children}</td>
+              ),
+              blockquote: ({ children }) => (
+                <blockquote className="my-3 border-l-2 border-primary/30 pl-4 italic text-foreground/70">
+                  {children}
+                </blockquote>
+              ),
               a({ href, children }) {
                 if (!href || href.startsWith('#')) return <span>{children}</span>;
                 return (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary underline underline-offset-2"
-                  >
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">
                     {children}
                   </a>
                 );
