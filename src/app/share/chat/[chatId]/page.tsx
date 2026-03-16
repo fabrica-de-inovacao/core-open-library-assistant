@@ -99,11 +99,14 @@ export default async function ShareChatPage({ params }: ShareChatPageProps) {
         .filter((p: { type: string; text?: string }) => p.type === 'text' && p.text?.trim())
         .map((p: { type: string; text?: string }) => p.text ?? '');
       if (textParts.length === 0) return [];
+      const text = textParts.join('\n');
+      // Filter out system-injected user messages (e.g. [SISTEMA] instructions)
+      if (text.trimStart().startsWith('[SISTEMA]')) return [];
       return [
         {
           id: m.id,
           role: m.role as 'user' | 'assistant',
-          text: textParts.join('\n'),
+          text,
         },
       ];
     });
