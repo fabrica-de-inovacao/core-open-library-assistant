@@ -90,7 +90,7 @@ function articleToBibTeX(article: Article, index: number): string {
 /** Converte uma lista de artigos para string BibTeX completa. */
 function articlesToBibTeX(articleList: Article[], queryTitle: string): string {
   const header = [
-    `% BibTeX export — SOL Open Library Assistant`,
+    `% BibTeX export — C.O.R.E.`,
     `% Query: ${queryTitle}`,
     `% Exportado em: ${new Date().toISOString()}`,
     `% ${articleList.length} referência${articleList.length !== 1 ? 's' : ''}`,

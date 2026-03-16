@@ -22,10 +22,10 @@ export async function generateMetadata({ params }: SharePageProps): Promise<Meta
     .where(eq(searchQueries.id, id))
     .limit(1);
 
-  if (!query.length) return { title: 'Pesquisa não encontrada | SOL Open' };
+  if (!query.length) return { title: 'Pesquisa não encontrada | C.O.R.E.' };
   return {
-    title: `${query[0].originalQuery} | SOL Open Library Assistant`,
-    description: 'Revisão sistemática gerada pelo SOL Open Library Assistant.',
+    title: `${query[0].originalQuery} | C.O.R.E.`,
+    description: 'Revisão sistemática gerada pelo C.O.R.E. — Corpus Orchestration & Retrieval Engine.',
   };
 }
 
@@ -71,7 +71,7 @@ export default async function SharePage({ params }: SharePageProps) {
             <div className="bg-primary text-primary-foreground flex aspect-square size-7 items-center justify-center rounded-lg">
               <Library className="size-4" />
             </div>
-            <span className="font-semibold tracking-tight">SOL Open</span>
+            <span className="font-semibold tracking-tight">C.O.R.E.</span>
           </Link>
           <Badge variant="secondary" className="text-xs">
             Revisão Pública · Read-only
@@ -208,7 +208,7 @@ export default async function SharePage({ params }: SharePageProps) {
           <p className="text-muted-foreground text-xs">
             Gerado por{' '}
             <Link href="/" className="text-primary hover:underline">
-              SOL Open Library Assistant
+              C.O.R.E.
             </Link>{' '}
             · Revisão sistemática assistida por IA
           </p>
