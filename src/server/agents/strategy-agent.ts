@@ -75,16 +75,16 @@ Antes de gerar as queries, decompõe mentalmente o tópico em:
 Ex: "redes neurais" + "transfer learning" + "ensino superior"
 Use essa decomposição para garantir cobertura semântica ampla e termos precisos.
 
-REGRAS CRÍTICAS — COMPATIBILIDADE COM O MOTOR OJS DO SOL:
+REGRAS CRÍTICAS — FORMATO DAS STRINGS DE BUSCA BOOLEANA PARA O SOL:
 1. Retorne um objeto JSON com uma chave: "queries" (array de strings). Não inclua outros campos.
 2. Gere EXATAMENTE ${maxQueries} quer${maxQueries === 1 ? 'y' : 'ies'} — nem mais, nem menos.
-3. PROIBIDO usar operadores booleanos (AND, OR, NOT) e parênteses aninhados. O motor OJS do SOL não os suporta confiávelmente e pode ignorar ou misinterpretar a sintaxe complexa.
-4. Use aspas duplas APENAS para termos compostos que devem aparecer juntos: "inteligência artificial" "ensino superior". Múltiplas frases entre aspas na mesma query são permitidas e funcionam como AND implícito no OJS.
-5. Combine termos simplesmente por adjacência (espaço = busca por todos os termos): "machine learning" educação computação.
+3. USE operadores booleanos — o motor OJS do SOL os suporta: AND, OR, NOT e parênteses. Escreva-os SEMPRE em MAIÚSCULAS. Ex: ("ensino superior" OR "educação superior") AND "inteligência artificial".
+4. Coloque SEMPRE frases compostas entre aspas duplas: "machine learning", "ensino médio", "redes neurais". Termos simples não precisam de aspas.
+5. Estrutura recomendada: ("termo principal" OR sinônimo) AND ("contexto" OR "area"). Agrupe sinônimos com OR dentro de parênteses; combine conceitos distintos com AND.
 6. ${maxQueries >= 2 ? 'Gere pelo menos 1 query em português e 1 em inglês para maximizar o recall.' : 'Gere a query no idioma mais relevante para o tópico (português para contexto nacional, inglês para internacional).'}
-7. NOMES PRÓPRIOS (projetos, programas, siglas, instituições): PRESERVE-OS exatamente entre aspas duplas — NUNCA os traduza nem acrescente variações. ✅ OK: "Mermãs Digitais" inclusão digital | ❌ PROIBIDO: "Mermãs Digitais" OR "Digital Mermaids".
+7. NOMES PRÓPRIOS (projetos, programas, siglas, instituições): PRESERVE-OS exatamente entre aspas duplas — NUNCA os traduza nem acrescente variações. ✅ OK: "Mermãs Digitais" AND ("inclusão digital" OR "educação") | ❌ PROIBIDO: "Mermãs Digitais" OR "Digital Mermaids".
 8. Prefira termos específicos ao tópico; evite stopwords e termos genéricos demais.
-9. Antes de gerar o JSON, pense nos termos-chave, nos sinônimos disponíveis e na cobertura temática — depois gere o JSON.
+9. Antes de gerar o JSON, identifique o conceito central, seus sinônimos e o contexto — depois monte a estrutura booleana e gere o JSON.
 10. Retorne APENAS o JSON. Sem texto extra fora do objeto JSON.`,
     prompt: `Tópico de pesquisa: "${topic}"${rawSection}${failedSection}
 ${profileContext}${fewShotContext}
