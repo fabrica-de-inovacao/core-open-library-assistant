@@ -80,12 +80,11 @@ async function fetchSOLPage(
     doi: string | null;
   }>
 > {
-  // Normaliza a query para o motor OJS do SOL (remove sintaxe booleana incompatível)
-  const solQuery = normalizeSOLQuery(q);
-  const searchUrl = `https://sol.sbc.org.br/busca/index.php/integrada/results?query=${encodeURIComponent(solQuery)}&archiveIds%5B%5D=1&archiveIds%5B%5D=2&archiveIds%5B%5D=3&page=${page}`;
+  // Usa a query boolean diretamente (OJS/PKP suporta AND, OR, NOT e aspas para frases)
+  const searchUrl = `https://sol.sbc.org.br/busca/index.php/integrada/results?query=${encodeURIComponent(q)}&archiveIds%5B%5D=1&archiveIds%5B%5D=2&archiveIds%5B%5D=3&page=${page}`;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000);
+    const timeout = setTimeout(() => controller.abort(), 40_000);
     const response = await fetch(searchUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
       signal: controller.signal,
@@ -98,7 +97,7 @@ async function fetchSOLPage(
 
     const html = await response.text();
     logger.debug(
-      `[Search] 🌐 SOL q="${solQuery.slice(0, 50)}" (orig: "${q.slice(0, 30)}") pág.${page} | HTML ${html.length} chars`
+      `[Search] 🌐 SOL q="${q.slice(0, 80)}" pág.${page} | HTML ${html.length} chars`
     );
 
     const $ = cheerio.load(html);
@@ -135,13 +134,13 @@ async function fetchSOLPage(
     });
 
     logger.debug(
-      `[Search] 🔍 SOL q="${solQuery.slice(0, 50)}" pág.${page}: ${results.length} artigo(s)`
+      `[Search] 🔍 SOL q="${q.slice(0, 80)}" pág.${page}: ${results.length} artigo(s)`
     );
     return results;
   } catch (err) {
     const isAbort = (err as Error).name === 'AbortError';
     logger.warn(
-      `[Search] ⏱️ SOL q="${solQuery.slice(0, 50)}" pág.${page} ${isAbort ? 'timeout (20s)' : 'erro'}: ${(err as Error).message}`
+      `[Search] ⏱️ SOL q="${q.slice(0, 80)}" pág.${page} ${isAbort ? 'timeout (40s)' : 'erro'}: ${(err as Error).message}`
     );
     return [];
   }
@@ -269,11 +268,11 @@ export async function GET(request: Request) {
         if (qMatch) quotedPhrasesRaw.push(...qMatch.map((p) => p.replace(/"/g, '')));
       }
       const quotedPhrases = [...new Set(quotedPhrasesRaw)];
-      // Como fallback final, combina todas as frases-chave únicas em uma busca simples
+      // Fallback booliano: une as frases-chave com OR para manter precisão
       const fallbackTerms =
         quotedPhrases.length > 0
-          ? quotedPhrases.join(' ')
-          : qs.map((q) => normalizeSOLQuery(q)).join(' ');
+          ? quotedPhrases.map((p) => `"${p}"`).join(' OR ')
+          : qs.map((q) => normalizeSOLQuery(q)).join(' OR ');
 
       if (fallbackTerms.trim()) {
         logger.info(
