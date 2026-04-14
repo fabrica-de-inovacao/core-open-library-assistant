@@ -33,10 +33,6 @@ interface LoginModalProps {
 // ---------------------------------------------------------------------------
 
 export function LoginModal({ open, onOpenChange }: LoginModalProps) {
-  const handleSignIn = () => {
-    void signIn('google', { callbackUrl: '/workspace' });
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* DialogContent sempre montado — Radix controla visibilidade internamente */}
@@ -54,13 +50,14 @@ export function LoginModal({ open, onOpenChange }: LoginModalProps) {
           </DialogDescription>
         </DialogHeader>
 
-        {/* Botão Google — mesmo estilo visual da antiga /login */}
-        <button
-          type="button"
-          onClick={handleSignIn}
-          className="border-border bg-background text-foreground hover:bg-accent focus-visible:ring-primary mt-2 flex h-12 w-full items-center justify-center gap-3 rounded-full border px-4 py-2.5 text-base font-medium shadow-sm transition-all focus-visible:ring-2 focus-visible:outline-none"
-        >
-          <svg
+        <div className="mt-2 flex flex-col gap-4">
+          {/* Botão Google — estilo visual minimalista e primário */}
+          <button
+            type="button"
+            onClick={() => void signIn('google', { callbackUrl: '/workspace' })}
+            className="border-border bg-background text-foreground hover:bg-accent focus-visible:ring-primary flex h-12 w-full items-center justify-center gap-3 rounded-full border px-4 py-2.5 text-base font-medium shadow-sm transition-all focus-visible:ring-2 focus-visible:outline-none"
+          >
+            <svg
             width="20"
             height="20"
             viewBox="0 0 24 24"
@@ -87,6 +84,29 @@ export function LoginModal({ open, onOpenChange }: LoginModalProps) {
           </svg>
           Entrar com Google
         </button>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t" />
+          </div>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-background text-muted-foreground px-2">Ou</span>
+          </div>
+        </div>
+
+        {/* Botão Anônimo */}
+        <button
+          type="button"
+          onClick={() => void signIn('anonymous', { callbackUrl: '/workspace' })}
+          className="bg-secondary text-secondary-foreground hover:bg-secondary/80 focus-visible:ring-primary flex h-12 w-full items-center justify-center gap-3 rounded-full px-4 py-2.5 text-base font-medium shadow-sm transition-all focus-visible:ring-2 focus-visible:outline-none"
+        >
+          Sou um revisor anônimo
+        </button>
+
+        <p className="text-muted-foreground mt-2 text-center text-xs">
+          No modo anônimo seus dados de sessão não são retidos de forma persistente nem utilizados para quaisquer fins que não sejam permitir o teste das funcionalidades.
+        </p>
+        </div>
       </DialogContent>
     </Dialog>
   );
