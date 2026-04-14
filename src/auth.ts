@@ -27,20 +27,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       async authorize() {
         const anonId = crypto.randomUUID();
         const anonEmail = `anon_${anonId}@anon.local`;
-        
+
         // Cria usuário anônimo no banco dinamicamente
-        const [newUser] = await db.insert(schema.users).values({
-          id: anonId,
-          name: 'Revisor Anônimo',
-          email: anonEmail,
-          image: `https://api.dicebear.com/7.x/avataaars/svg?seed=${anonId}`,
-        }).returning();
+        const [newUser] = await db
+          .insert(schema.users)
+          .values({
+            id: anonId,
+            name: 'Revisor Anônimo',
+            email: anonEmail,
+            image: `https://api.dicebear.com/7.x/avataaars/svg?seed=${anonId}`,
+          })
+          .returning();
 
         if (newUser) {
           return newUser;
         }
         return null;
-      }
+      },
     }),
   ],
   session: {
