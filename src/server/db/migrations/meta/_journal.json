@@ -92,6 +92,13 @@
       "when": 1772937600000,
       "tag": "0012_search_queries_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1773024000000,
+      "tag": "0013_drop_global_doi_unique",
+      "breakpoints": true
     }
   ]
 }

@@ -101,6 +101,30 @@ async function compressMessages(oldMessages: any[], summarizerModel: any): Promi
   return parts.join('\n\n');
 }
 
+function flattenToolHistory(messages: any[]): any[] {
+  return messages
+    .map((m, idx) => {
+      if (idx === messages.length - 1) return m;
+      const hasToolParts = (m.parts ?? []).some((p: any) => p.type?.startsWith('tool-'));
+      if (!hasToolParts) return m;
+
+      const text = (m.parts ?? [])
+        .filter((p: any) => p.type === 'text' && p.text?.trim())
+        .map((p: any) => p.text.trim())
+        .join('\n');
+      const toolSummary = describeToolCalls([m]);
+      const summary = [text, toolSummary].filter(Boolean).join('\n');
+
+      if (!summary) return null;
+      return {
+        ...m,
+        role: m.role === 'user' ? 'user' : 'assistant',
+        parts: [{ type: 'text', text: summary }],
+      };
+    })
+    .filter(Boolean);
+}
+
 /**
  * Quando o histórico ultrapassa MAX_HISTORY_MESSAGES:
  * V2: Lê summary cacheado do DB — regenera via LLM apenas quando necessário.
@@ -417,6 +441,8 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
   // Comprime o histórico quando necessário para evitar context overflow.
   // V2: usa cache do DB — LLM só chamado quando o cache está ausente ou vencido.
   const summarizerModel = await getUserModel(session?.user?.id ?? null, 'tldr');
+  const flattenedMessages = flattenToolHistory(messagesForModel);
+
   const {
     messages: compressedMessages,
     compressed,
@@ -424,7 +450,7 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
     newSummary,
     newSummaryMsgCount,
   } = await compressHistoryIfNeeded(
-    messagesForModel,
+    flattenedMessages,
     summarizerModel,
     cachedSummary,
     cachedSummaryCount

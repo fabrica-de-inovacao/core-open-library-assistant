@@ -400,17 +400,29 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
         if not is_user_upload:
             scraped = await _scrape_detail_page(http, article["original_url"])
             doi = doi or scraped.get("doi")
-            await db.execute(
-                """
-                UPDATE articles
-                SET doi=COALESCE($2, doi), keywords=COALESCE($3, keywords), abstract=COALESCE($4, abstract)
-                WHERE id=$1
-                """,
-                article_id,
-                doi,
-                scraped.get("keywords"),
-                scraped.get("abstract"),
-            )
+            try:
+                await db.execute(
+                    """
+                    UPDATE articles
+                    SET doi=COALESCE($2, doi), keywords=COALESCE($3, keywords), abstract=COALESCE($4, abstract)
+                    WHERE id=$1
+                    """,
+                    article_id,
+                    doi,
+                    scraped.get("keywords"),
+                    scraped.get("abstract"),
+                )
+            except asyncpg.UniqueViolationError:
+                await db.execute(
+                    """
+                    UPDATE articles
+                    SET keywords=COALESCE($2, keywords), abstract=COALESCE($3, abstract)
+                    WHERE id=$1
+                    """,
+                    article_id,
+                    scraped.get("keywords"),
+                    scraped.get("abstract"),
+                )
 
         if doi:
             crossref = await _crossref_enrich(http, doi)
@@ -519,18 +531,12 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
         )
         await check_and_mark_query_done(ctx, query_id)
         return {"status": status, "article_id": article_id}
-    except Exception:
-        job_try = int(ctx.get("job_try", 1) or 1)
-        max_tries = int(os.environ.get("ARTICLE_MAX_TRIES", "3") or "3")
-        if job_try >= max_tries:
-            await db.execute("UPDATE articles SET status='failed' WHERE id=$1", article_id)
-            await publish_article_update(redis, query_id, article_id=article_id, status="failed")
-            await check_and_mark_query_done(ctx, query_id)
-        else:
-            print(
-                f"[queue_worker] Artigo {article_id} falhou na tentativa {job_try}/{max_tries}; arq fará retry."
-            )
-        raise
+    except Exception as exc:
+        await db.execute("UPDATE articles SET status='failed' WHERE id=$1", article_id)
+        await publish_article_update(redis, query_id, article_id=article_id, status="failed")
+        await check_and_mark_query_done(ctx, query_id)
+        print(f"[queue_worker] Artigo {article_id} marcado como failed: {exc!r}")
+        return {"failed": True, "article_id": article_id, "error": repr(exc)}
 
 
 async def startup(ctx):

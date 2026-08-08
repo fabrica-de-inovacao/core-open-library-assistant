@@ -17,7 +17,7 @@ services:
       context: ./worker
       dockerfile: Dockerfile
     ports:
-      - '8000:8000'
+      - '8917:8917'
     # Em dev: monta o código para hot-reload sem rebuild de imagem.
     # Em produção (Oracle): remover este volume — a imagem já contém o código.
     volumes:
@@ -25,9 +25,13 @@ services:
     env_file:
       - .env
       - ./worker/.env.worker
+    command: >
+      sh -c "python -c 'import cryptography' 2>/dev/null || pip install --no-cache-dir -r requirements.txt;
+      arq queue_worker.WorkerSettings &
+      uvicorn main:app --host 0.0.0.0 --port $${WORKER_PORT:-8917} --workers $${WORKERS:-1}"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8917/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
