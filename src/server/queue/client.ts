@@ -14,14 +14,4 @@ export const orchestratorQueue = new Queue<ArticleOrchestrationJob>('core.articl
 
 export async function enqueueArticleBatch(job: ArticleOrchestrationJob) {
   await orchestratorQueue.add('orchestrate', job);
-
-  // Enfileira os artigos individualmente no Redis para o worker Python consumir
-  await Promise.all(
-    job.article_ids.map((articleId) =>
-      bullmqRedis.lpush(
-        'core:article.process.pending',
-        JSON.stringify({ ...job, article_id: articleId })
-      )
-    )
-  );
 }

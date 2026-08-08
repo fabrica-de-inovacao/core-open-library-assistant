@@ -64,6 +64,37 @@ async function runRelevanceGate(queryId: string, skipRelevanceGate?: boolean) {
   return { proceed: true, reason: 'ok' };
 }
 
+async function enqueuePythonArticleJobs(job: ArticleOrchestrationJob) {
+  const workerUrl = process.env.PYTHON_WORKER_URL;
+  const workerApiKey = process.env.WORKER_API_KEY;
+
+  if (!workerUrl || !workerApiKey) {
+    throw new Error('PYTHON_WORKER_URL e WORKER_API_KEY são obrigatórios para enfileirar artigos.');
+  }
+
+  const response = await fetch(`${workerUrl.replace(/\/$/, '')}/jobs/articles`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Worker-Token': workerApiKey,
+    },
+    body: JSON.stringify({
+      article_ids: job.article_ids,
+      query_id: job.query_id,
+      user_id: job.user_id,
+      tldr_lang: job.tldr_lang ?? 'pt-BR',
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Python worker enqueue falhou (${response.status}): ${body.slice(0, 300)}`);
+  }
+
+  return response.json() as Promise<{ success: boolean; enqueued: number; job_ids: string[] }>;
+}
+
 export function startOrchestratorWorker() {
   const worker = new Worker<ArticleOrchestrationJob>(
     'core.article.orchestrate',
@@ -73,17 +104,10 @@ export function startOrchestratorWorker() {
 
       if (!relevanceGate.proceed) return { success: false, skipped: true };
 
-      // v2 step 1: keep existing Python HTTP worker path until arq worker lands.
-      // This removes Inngest durability risk now, without rewriting the PDF pipeline yet.
-      for (const articleId of article_ids) {
-        await bullmqRedis.lpush(
-          'core:article.process.pending',
-          JSON.stringify({ ...job.data, article_id: articleId })
-        );
-      }
+      const result = await enqueuePythonArticleJobs(job.data);
 
-      logger.info(`[BullMQ] Fan-out placeholder: ${article_ids.length} artigo(s) | query_id=${query_id}`);
-      return { success: true, dispatched: article_ids.length };
+      logger.info(`[BullMQ] Fan-out arq: ${result.enqueued} artigo(s) | query_id=${query_id}`);
+      return { success: true, dispatched: result.enqueued };
     },
     { connection: bullmqRedis, concurrency: 5 }
   );

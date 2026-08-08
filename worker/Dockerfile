@@ -30,6 +30,8 @@ EXPOSE 8917
 #   MAX_CONCURRENT_EXTRACTIONS — semáforo de backpressure (padrão: 2 × EXTRACTION_WORKERS)
 #   OCR_PAGE_CHUNK_SIZE      — páginas por chunk no OCR (padrão: 10)
 #   WORKER_API_KEY           — token de autenticação
-#   ENABLE_ARQ_WORKER        — quando "1", também inicia o worker Redis v2
+#   ARTICLE_QUEUE_CONCURRENCY — jobs arq simultâneos (padrão: 4)
+#   ARTICLE_JOB_TIMEOUT      — timeout por artigo em segundos (padrão: 300)
+#   ARTICLE_MAX_TRIES        — tentativas por artigo no arq (padrão: 3)
 #   WORKER_PORT              — porta HTTP interna (padrão: 8917)
-CMD ["sh", "-c", "if [ \"${ENABLE_ARQ_WORKER:-0}\" = \"1\" ]; then python queue_worker.py & fi; uvicorn main:app --host 0.0.0.0 --port ${WORKER_PORT:-8917} --workers ${WORKERS:-1}"]
+CMD ["sh", "-c", "arq queue_worker.WorkerSettings & uvicorn main:app --host 0.0.0.0 --port ${WORKER_PORT:-8917} --workers ${WORKERS:-1}"]

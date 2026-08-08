@@ -520,9 +520,16 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
         await check_and_mark_query_done(ctx, query_id)
         return {"status": status, "article_id": article_id}
     except Exception:
-        await db.execute("UPDATE articles SET status='failed' WHERE id=$1", article_id)
-        await publish_article_update(redis, query_id, article_id=article_id, status="failed")
-        await check_and_mark_query_done(ctx, query_id)
+        job_try = int(ctx.get("job_try", 1) or 1)
+        max_tries = int(os.environ.get("ARTICLE_MAX_TRIES", "3") or "3")
+        if job_try >= max_tries:
+            await db.execute("UPDATE articles SET status='failed' WHERE id=$1", article_id)
+            await publish_article_update(redis, query_id, article_id=article_id, status="failed")
+            await check_and_mark_query_done(ctx, query_id)
+        else:
+            print(
+                f"[queue_worker] Artigo {article_id} falhou na tentativa {job_try}/{max_tries}; arq fará retry."
+            )
         raise
 
 
@@ -549,41 +556,11 @@ async def shutdown(ctx):
         await ctx["http"].aclose()
 
 
-async def process_pending_loop() -> None:
-    ctx: dict[str, Any] = {}
-    await startup(ctx)
-    redis = ctx["redis"]
-    try:
-        while True:
-            try:
-                item = await redis.brpop("core:article.process.pending", timeout=5)
-                if not item:
-                    continue
-                _queue, raw = item
-                data = json.loads(raw)
-                await process_single_article(
-                    ctx,
-                    article_id=data["article_id"],
-                    query_id=data["query_id"],
-                    user_id=data.get("user_id", "anonymous"),
-                    tldr_lang=data.get("tldr_lang", "pt"),
-                )
-            except Exception as e:
-                print(f"[queue_worker] Erro no loop de processamento: {e}")
-                await asyncio.sleep(2)
-    finally:
-        await shutdown(ctx)
-
-
 class WorkerSettings:
     functions = [process_single_article]
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
-    max_jobs = int(os.environ.get("MAX_CONCURRENT_EXTRACTIONS", "4") or "4")
+    max_jobs = int(os.environ.get("ARTICLE_QUEUE_CONCURRENCY", "4") or "4")
     job_timeout = int(os.environ.get("ARTICLE_JOB_TIMEOUT", "300"))
-    max_tries = 3
+    max_tries = int(os.environ.get("ARTICLE_MAX_TRIES", "3") or "3")
     on_startup = startup
     on_shutdown = shutdown
-
-
-if __name__ == "__main__":
-    asyncio.run(process_pending_loop())

@@ -95,6 +95,9 @@ EMBEDDING_MODEL=text-embedding-3-small
 SEMANTIC_SCHOLAR_API_KEY=
 EXTRACTION_UVICORN_WORKERS=2
 OCR_PAGE_CHUNK_SIZE=10
+ARTICLE_QUEUE_CONCURRENCY=4
+ARTICLE_JOB_TIMEOUT=300
+ARTICLE_MAX_TRIES=3
 ```
 
 Marque também `NEXT_PUBLIC_APP_URL` como **Build Arg**.
@@ -151,7 +154,7 @@ Postgres não tem pgvector. Use `pgvector/pgvector:pg16` ou instale extensão co
 Verifique:
 
 - `REDIS_URL` igual em `app` e `python-worker`.
-- `ENABLE_ARQ_WORKER='1'` no worker.
+- `ARTICLE_QUEUE_CONCURRENCY` maior que `0` no worker.
 - Logs do `python-worker`.
 
 ### Worker público retorna 401/403

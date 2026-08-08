@@ -43,6 +43,7 @@ Padrões de escalabilidade aplicados:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import re
@@ -54,6 +55,8 @@ from typing import Annotated, Optional
 import pymupdf
 import httpx
 import pytesseract
+from arq import create_pool
+from arq.connections import RedisSettings
 from bs4 import BeautifulSoup
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from pdf2image import convert_from_bytes
@@ -72,6 +75,7 @@ logger = logging.getLogger("sol.worker")
 # Configuração via variáveis de ambiente
 # ---------------------------------------------------------------------------
 API_KEY: str = os.getenv("WORKER_API_KEY", "your_secret_worker_key_here")
+REDIS_URL: str = os.environ["REDIS_URL"]
 
 # Processos separados para extração CPU-bound.
 # Oracle A1 (4 vCPU) → 4 processos. Ajustável para ambientes menores.
@@ -96,6 +100,7 @@ OCR_PAGE_CHUNK_SIZE: int = _int_env("OCR_PAGE_CHUNK_SIZE", 10)
 _http_client: httpx.AsyncClient
 _cpu_executor: ProcessPoolExecutor
 _extraction_semaphore: asyncio.Semaphore
+_arq_pool: object
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +109,7 @@ _extraction_semaphore: asyncio.Semaphore
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global _http_client, _cpu_executor, _extraction_semaphore
+    global _http_client, _cpu_executor, _extraction_semaphore, _arq_pool
 
     logger.info(
         f"[lifespan] Iniciando worker | CPU_WORKERS={CPU_WORKERS}"
@@ -126,10 +131,18 @@ async def lifespan(application: FastAPI):
     # Semáforo de backpressure: no máximo N extrações concorrentes por processo
     _extraction_semaphore = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTIONS)
 
+    # Pool arq compartilhado para enfileirar jobs de artigos no Redis.
+    _arq_pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
+
     logger.info("[lifespan] Recursos prontos — worker online")
     yield
 
     logger.info("[lifespan] Encerrando recursos...")
+    close_result = _arq_pool.close()
+    if inspect.isawaitable(close_result):
+        await close_result
+    if hasattr(_arq_pool, "wait_closed"):
+        await _arq_pool.wait_closed()
     await _http_client.aclose()
     _cpu_executor.shutdown(wait=False)
     logger.info("[lifespan] Encerrado")
@@ -152,6 +165,19 @@ class ExtractResponse(BaseModel):
     content_markdown: str
     char_count: int
     request_id: str
+
+
+class ArticleJobsRequest(BaseModel):
+    article_ids: list[str]
+    query_id: str
+    user_id: str = "anonymous"
+    tldr_lang: str = "pt-BR"
+
+
+class ArticleJobsResponse(BaseModel):
+    success: bool
+    enqueued: int
+    job_ids: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +370,26 @@ async def health_check():
         "cpu_workers": CPU_WORKERS,
         "max_concurrent_extractions": MAX_CONCURRENT_EXTRACTIONS,
     }
+
+
+@app.post("/jobs/articles", dependencies=[Depends(verify_token)], response_model=ArticleJobsResponse)
+async def enqueue_article_jobs(request: ArticleJobsRequest):
+    job_ids: list[str] = []
+    for article_id in request.article_ids:
+        job = await _arq_pool.enqueue_job(
+            "process_single_article",
+            article_id=article_id,
+            query_id=request.query_id,
+            user_id=request.user_id or "anonymous",
+            tldr_lang=request.tldr_lang or "pt-BR",
+        )
+        if job:
+            job_ids.append(job.job_id)
+
+    logger.info(
+        f"[jobs] Enfileirados {len(job_ids)}/{len(request.article_ids)} artigo(s) | query_id={request.query_id}"
+    )
+    return ArticleJobsResponse(success=True, enqueued=len(job_ids), job_ids=job_ids)
 
 
 @app.post("/extract", dependencies=[Depends(verify_token)], response_model=ExtractResponse)
