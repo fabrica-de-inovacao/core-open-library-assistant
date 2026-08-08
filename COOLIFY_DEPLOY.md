@@ -11,7 +11,7 @@ Stack v2 sem Supabase/Inngest. O Coolify hospeda:
 | `app` | Docker Compose service | público `https://core.seudominio.com` |
 | `python-worker` | Docker Compose service | público `https://worker.seudominio.com` |
 
-O app chama o worker pela rede interna: `http://python-worker:8000`. O domínio público do worker existe para uso externo futuro.
+O app chama o worker pela rede interna: `http://python-worker:8917`. O domínio público do worker existe para uso externo futuro.
 
 ## Decisões
 
@@ -55,10 +55,10 @@ Guarde a URL interna como `REDIS_URL`.
 docker-compose.coolify.yml
 ```
 
-4. Configure domínio do serviço `app` com target port `3000`.
-5. Configure domínio do serviço `python-worker` com target port `8000`.
+4. Configure domínio do serviço `app` com target port `3917`.
+5. Configure domínio do serviço `python-worker` com target port `8917`.
 
-O compose usa `expose`, não `ports`, para não fazer bind de `0.0.0.0:3000` ou `0.0.0.0:8000` no host. O Traefik do Coolify roteia para as portas internas.
+O compose usa `expose`, não `ports`, para não fazer bind no host. O Traefik do Coolify roteia para as portas internas não genéricas (`3917` e `8917`).
 
 ## 4. Environment Variables
 

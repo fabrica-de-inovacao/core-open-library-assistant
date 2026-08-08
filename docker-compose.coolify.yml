@@ -6,11 +6,11 @@
 #   REDIS_URL=<internal redis url>
 #
 # Expor publicamente via Coolify/Traefik usando portas internas, sem bind no host:
-#   app           -> target port 3000 -> https://core.seudominio.com
-#   python-worker -> target port 8000 -> https://worker.seudominio.com
+#   app           -> target port 3917 -> https://core.seudominio.com
+#   python-worker -> target port 8917 -> https://worker.seudominio.com
 #
 # O app deve chamar o worker pela rede interna Docker, não pelo domínio público:
-#   PYTHON_WORKER_URL=http://python-worker:8000
+#   PYTHON_WORKER_URL=http://python-worker:8917
 
 services:
   app:
@@ -20,9 +20,10 @@ services:
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
     expose:
-      - '3000'
+      - '3917'
     environment:
       NODE_ENV: production
+      PORT: '3917'
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       AUTH_URL: ${AUTH_URL}
@@ -31,7 +32,7 @@ services:
       AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
       USER_SECRET_ENCRYPTION_KEY: ${USER_SECRET_ENCRYPTION_KEY}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-      PYTHON_WORKER_URL: http://python-worker:8000
+      PYTHON_WORKER_URL: http://python-worker:8917
       WORKER_API_KEY: ${WORKER_API_KEY}
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -57,16 +58,17 @@ services:
       context: ./worker
       dockerfile: Dockerfile
     expose:
-      - '8000'
+      - '8917'
     environment:
       PYTHONUNBUFFERED: '1'
+      WORKER_PORT: '8917'
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       AUTH_SECRET: ${AUTH_SECRET}
       USER_SECRET_ENCRYPTION_KEY: ${USER_SECRET_ENCRYPTION_KEY}
       ENABLE_ARQ_WORKER: '1'
       WORKER_API_KEY: ${WORKER_API_KEY}
-      PYTHON_WORKER_URL: http://127.0.0.1:8000
+      PYTHON_WORKER_URL: http://127.0.0.1:8917
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
@@ -81,7 +83,7 @@ services:
       OCR_PAGE_CHUNK_SIZE: ${OCR_PAGE_CHUNK_SIZE:-10}
     restart: unless-stopped
     healthcheck:
-      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8917/health')"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -22,7 +22,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-EXPOSE 8000
+EXPOSE 8917
 
 # Variáveis de ambiente configuráveis via docker-compose / env file:
 #   WORKERS                  — número de processos uvicorn (padrão: 4 para Oracle A1)
@@ -31,4 +31,5 @@ EXPOSE 8000
 #   OCR_PAGE_CHUNK_SIZE      — páginas por chunk no OCR (padrão: 10)
 #   WORKER_API_KEY           — token de autenticação
 #   ENABLE_ARQ_WORKER        — quando "1", também inicia o worker Redis v2
-CMD ["sh", "-c", "if [ \"${ENABLE_ARQ_WORKER:-0}\" = \"1\" ]; then python queue_worker.py & fi; uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS:-1}"]
+#   WORKER_PORT              — porta HTTP interna (padrão: 8917)
+CMD ["sh", "-c", "if [ \"${ENABLE_ARQ_WORKER:-0}\" = \"1\" ]; then python queue_worker.py & fi; uvicorn main:app --host 0.0.0.0 --port ${WORKER_PORT:-8917} --workers ${WORKERS:-1}"]
