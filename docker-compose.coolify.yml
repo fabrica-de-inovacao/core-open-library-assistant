@@ -5,9 +5,9 @@
 #   DATABASE_URL=<internal postgres url>
 #   REDIS_URL=<internal redis url>
 #
-# Expor publicamente:
-#   app           -> porta 3000 -> https://core.seudominio.com
-#   python-worker -> porta 8000 -> https://worker.seudominio.com
+# Expor publicamente via Coolify/Traefik usando portas internas, sem bind no host:
+#   app           -> target port 3000 -> https://core.seudominio.com
+#   python-worker -> target port 8000 -> https://worker.seudominio.com
 #
 # O app deve chamar o worker pela rede interna Docker, não pelo domínio público:
 #   PYTHON_WORKER_URL=http://python-worker:8000
@@ -19,8 +19,8 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-    ports:
-      - '3000:3000'
+    expose:
+      - '3000'
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL}
@@ -56,8 +56,8 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile
-    ports:
-      - '8000:8000'
+    expose:
+      - '8000'
     environment:
       PYTHONUNBUFFERED: '1'
       DATABASE_URL: ${DATABASE_URL}

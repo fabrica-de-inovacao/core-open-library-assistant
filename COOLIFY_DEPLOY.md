@@ -55,8 +55,10 @@ Guarde a URL interna como `REDIS_URL`.
 docker-compose.coolify.yml
 ```
 
-4. Configure domínio do serviço `app` na porta `3000`.
-5. Configure domínio do serviço `python-worker` na porta `8000`.
+4. Configure domínio do serviço `app` com target port `3000`.
+5. Configure domínio do serviço `python-worker` com target port `8000`.
+
+O compose usa `expose`, não `ports`, para não fazer bind de `0.0.0.0:3000` ou `0.0.0.0:8000` no host. O Traefik do Coolify roteia para as portas internas.
 
 ## 4. Environment Variables
 
