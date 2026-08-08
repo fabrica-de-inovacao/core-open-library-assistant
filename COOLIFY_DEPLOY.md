@@ -2,169 +2,168 @@
 
 ## Visão geral
 
-O projeto tem 3 serviços deployados como **Docker Compose Stack** no Coolify:
+Stack v2 sem Supabase/Inngest. O Coolify hospeda:
 
-| Serviço | Imagem | Porta interna |
-|---------|--------|---------------|
-| `app` | Build do Dockerfile raiz (Next.js) | 3000 |
-| `python-worker` | Build do `worker/Dockerfile` (FastAPI) | 8000 |
-| `inngest` | `inngest/inngest:latest` | 8288 |
+| Resource | Tipo | Exposição |
+|---|---|---|
+| `postgres` | PostgreSQL separado | interno |
+| `redis` | Redis separado | interno |
+| `app` | Docker Compose service | público `https://core.seudominio.com` |
+| `python-worker` | Docker Compose service | público `https://worker.seudominio.com` |
 
-Apenas `app` é exposto publicamente via Traefik. Os outros dois ficam na rede interna do stack.
+O app chama o worker pela rede interna: `http://python-worker:8000`. O domínio público do worker existe para uso externo futuro.
 
----
+## Decisões
 
-## Pré-requisitos
+- Postgres separado no Coolify: backups, restore e storage mais simples.
+- Redis separado no Coolify: fila BullMQ e streams sem acoplar estado ao deploy da app.
+- `python-worker` exposto: permitido, mas endpoints sensíveis exigem `X-Worker-Token: WORKER_API_KEY`.
+- Migrations rodam manualmente após deploy. Não rodar migrations em boot.
+- `USER_SECRET_ENCRYPTION_KEY` deve ser estável. Se mudar, chaves LLM salvas pelos usuários não decifram.
 
-- Repositório no GitHub (ou GitLab/Gitea)
-- Supabase project configurado com as migrations aplicadas (`yarn db:migrate`)
-- Google Cloud OAuth credentials (console.cloud.google.com)
-- Google AI API key (aistudio.google.com)
-- Domínio apontando para o IP da VPS
+## 1. Criar Postgres
 
----
+No Coolify: **New Resource -> PostgreSQL**.
 
-## Passo a Passo
+Requisito: `pgvector`. Se o Postgres padrão não tiver a extensão, crie um Postgres custom com imagem:
 
-### 1. Criar o recurso no Coolify
-
-1. No Coolify: **New Resource → Docker Compose**
-2. Selecione o repositório e branch (`main`)
-3. Em **Docker Compose Location**: `docker-compose.coolify.yml`
-4. Em **Domain**: configure seu domínio (ex: `core.seudominio.com`)
-5. Coolify adicionará automaticamente os labels Traefik no serviço `app`
-
-> O Coolify detecta qual serviço expor pelo campo `ports`. Confirme que apenas `app:3000` é roteado pelo proxy.
-
----
-
-### 2. Configurar Build Arguments
-
-Em **Configuration → Environment Variables**, adicione as variáveis com o toggle **"Build Arg"** ativado:
-
-```
-NEXT_PUBLIC_SUPABASE_URL          = https://PROJETO.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY     = eyJ...
-NEXT_PUBLIC_APP_URL               = https://core.seudominio.com
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = sb_publishable_...
+```text
+pgvector/pgvector:pg16
 ```
 
-> **Crítico**: essas variáveis são embutidas no bundle JS em build time. Devem ser configuradas ANTES do primeiro deploy.
+Depois confirme no terminal SQL:
 
----
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
 
-### 3. Configurar Variáveis de Ambiente (Runtime)
+Guarde a URL interna como `DATABASE_URL`.
 
-Adicione todas as variáveis abaixo na aba **Environment** (sem toggle Build Arg):
+## 2. Criar Redis
 
-```bash
-# App
+No Coolify: **New Resource -> Redis**.
+
+Guarde a URL interna como `REDIS_URL`.
+
+## 3. Criar Docker Compose Resource
+
+1. **New Resource -> Docker Compose**.
+2. Selecione o repositório e branch.
+3. Configure **Docker Compose Location**:
+
+```text
+docker-compose.coolify.yml
+```
+
+4. Configure domínio do serviço `app` na porta `3000`.
+5. Configure domínio do serviço `python-worker` na porta `8000`.
+
+## 4. Environment Variables
+
+Configure no resource Docker Compose:
+
+```env
+NEXT_PUBLIC_APP_URL=https://core.seudominio.com
 AUTH_URL=https://core.seudominio.com
-NODE_ENV=production
 
-# Auth
+DATABASE_URL=<internal postgres url do Coolify>
+REDIS_URL=<internal redis url do Coolify>
+
 AUTH_SECRET=<openssl rand -base64 32>
-AUTH_GOOGLE_ID=<id>.apps.googleusercontent.com
-AUTH_GOOGLE_SECRET=<secret>
+USER_SECRET_ENCRYPTION_KEY=<openssl rand -base64 32>
+WORKER_API_KEY=<openssl rand -hex 32>
 
-# Banco
-DATABASE_URL=postgresql://postgres.PROJETO:SENHA@aws-X.pooler.supabase.com:6543/postgres
+AUTH_GOOGLE_ID=<google-client-id>.apps.googleusercontent.com
+AUTH_GOOGLE_SECRET=<google-client-secret>
 
-# Inngest (self-hosted no stack — URL interna)
-INNGEST_BASE_URL=http://inngest:8288
-INNGEST_API_KEY=sk_inngest_<string longa>
-INNGEST_SIGNING_KEY=signkey-prod-<openssl rand -hex 32>
-INNGEST_EVENT_KEY=<string longa>
-INNGEST_BASIC_AUTH=          # deixar vazio se não configurou auth no Inngest
+OPENAI_API_KEY=<fallback opcional>
+GOOGLE_GENERATIVE_AI_API_KEY=<fallback opcional>
+GROQ_API_KEY=<fallback opcional>
 
-# Worker (URL interna do stack)
-PYTHON_WORKER_URL=http://python-worker:8000
-WORKER_API_KEY=sk_worker_<openssl rand -hex 32>
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+LLM_MODEL_SYNTHESIS=gpt-4o-mini
+LLM_MODEL_STRATEGY=gpt-4o-mini
+LLM_MODEL_RERANKER=gpt-4o-mini
+LLM_MODEL_TLDR=gpt-4o-mini
 
-# AI
-GOOGLE_GENERATIVE_AI_API_KEY=AIza...
-LLM_PROVIDER=google
-EMBEDDING_MODEL=gemini-embedding-001
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-small
 
-# Logging
-LOG_MODE=production
+SEMANTIC_SCHOLAR_API_KEY=
+EXTRACTION_UVICORN_WORKERS=2
+OCR_PAGE_CHUNK_SIZE=10
 ```
 
----
+Marque também `NEXT_PUBLIC_APP_URL` como **Build Arg**.
 
-### 4. Google OAuth — Authorized Redirect URIs
+## 5. Google OAuth
 
-No Google Cloud Console, adicione:
+No Google Cloud Console, adicione o redirect URI:
 
-```
+```text
 https://core.seudominio.com/api/auth/callback/google
 ```
 
----
+## 6. Primeiro Deploy
 
-### 5. Primeiro Deploy
-
-1. Clique em **Deploy** no Coolify
-2. Acompanhe os logs do build — o Next.js build demora ~3-5min
-3. Após deploy, acesse `https://core.seudominio.com`
-
----
-
-### 6. Aplicar Migrations do Banco
-
-Após o primeiro deploy, rode as migrations via Coolify Terminal ou localmente:
+1. Deploy do Docker Compose resource.
+2. Aguarde `app` e `python-worker` ficarem healthy.
+3. Rode migrations no terminal do container `app`:
 
 ```bash
-# Localmente com DATABASE_URL configurado:
-yarn db:migrate
-
-# Ou via Coolify → Terminal do container app:
 yarn db:migrate
 ```
 
----
+4. Acesse:
 
-## Atualização do Inngest Após Deploy
+```text
+https://core.seudominio.com
+```
 
-O Inngest self-hosted precisa ser notificado da URL do handler após cada deploy:
+5. Teste health do worker:
 
-O Next.js registra automaticamente via `INNGEST_BASE_URL` + a rota `/api/inngest`.
-Não é necessária ação manual se `INNGEST_BASE_URL=http://inngest:8288`.
+```text
+https://worker.seudominio.com/health
+```
 
----
+## 7. Teste Worker Externo
 
-## Variáveis que NÃO precisam ser configuradas
+Exemplo de chamada protegida:
 
-Têm fallback no código e são opcionais:
-
-| Variável | Default |
-|----------|---------|
-| `LLM_MODEL`, `LLM_MODEL_*` | Modelos definidos em `ai-provider.ts` |
-| `SEMANTIC_SCHOLAR_API_KEY` | Rate limit menor, mas funciona sem |
-| `EXTRACTION_UVICORN_WORKERS` | 2 |
-| `EXTRACTION_WORKERS` | `cpu_count` |
-| `MAX_CONCURRENT_EXTRACTIONS` | `EXTRACTION_WORKERS * 2` |
-| `OCR_PAGE_CHUNK_SIZE` | 10 |
-
----
+```bash
+curl -X POST https://worker.seudominio.com/extract \
+  -H "Content-Type: application/json" \
+  -H "X-Worker-Token: $WORKER_API_KEY" \
+  -d '{"article_url":"https://example.com/paper.pdf","force_ocr":false}'
+```
 
 ## Troubleshooting
 
-### Build falha com "missing env var"
-`SKIP_ENV_VALIDATION=1` já está no Dockerfile. Se ainda falhar, verifique os Build Args.
+### Migrations falham com `type "vector" does not exist`
+
+Postgres não tem pgvector. Use `pgvector/pgvector:pg16` ou instale extensão compatível.
+
+### Artigos ficam `pending`
+
+Verifique:
+
+- `REDIS_URL` igual em `app` e `python-worker`.
+- `ENABLE_ARQ_WORKER='1'` no worker.
+- Logs do `python-worker`.
+
+### Worker público retorna 401/403
+
+Confirme header:
+
+```text
+X-Worker-Token: <WORKER_API_KEY>
+```
+
+### Chave OpenAI do usuário não decifra
+
+`USER_SECRET_ENCRYPTION_KEY` mudou ou não está igual entre `app` e `python-worker`.
 
 ### OAuth redirect loop
-`AUTH_URL` deve ser exatamente a URL pública sem trailing slash.
 
-### Artigos ficam em `pending` para sempre
-O worker Python não está acessível. Verifique:
-- `PYTHON_WORKER_URL=http://python-worker:8000` (nome do serviço no compose)
-- `WORKER_API_KEY` é o mesmo nos dois serviços
-- Logs do container `python-worker` no Coolify
-
-### Inngest jobs não disparam
-- Verifique `INNGEST_BASE_URL` aponta para `http://inngest:8288`
-- O Inngest precisa que a app esteja up para registrar os handlers — reinicie o `app` após o `inngest` subir
-
-### Erros de DB "prepare: false"
-Já configurado no `db/index.ts`. Se aparecer erro de prepared statement, o `DATABASE_URL` deve usar a porta `6543` (transaction pooler), não `5432`.
+`AUTH_URL` deve ser a URL pública exata, sem trailing slash.
