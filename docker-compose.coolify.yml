@@ -51,6 +51,8 @@ services:
     depends_on:
       python-worker:
         condition: service_healthy
+    networks:
+      - coolify
     restart: unless-stopped
 
   python-worker:
@@ -88,3 +90,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
