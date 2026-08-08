@@ -25,6 +25,7 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 
 # Apenas os artefatos necessários para rodar
 COPY --from=builder /app/public ./public
