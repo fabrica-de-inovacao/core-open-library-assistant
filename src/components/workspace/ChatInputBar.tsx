@@ -18,7 +18,7 @@ import { AttachmentChip } from '@/components/workspace/AttachmentChip';
 import { InputToolbar } from '@/components/workspace/InputToolbar';
 import { useState } from 'react';
 import type { useAttachments } from '@/hooks/useAttachments';
-import type { AnalysisMode, ModelValue } from '@/hooks/useSearchSettings';
+import type { AnalysisMode } from '@/hooks/useSearchSettings';
 
 interface ChatInputBarProps {
   // Input principal
@@ -40,9 +40,7 @@ interface ChatInputBarProps {
   // Modo de análise unificado
   analysisMode?: AnalysisMode;
   onAnalysisModeChange?: (m: AnalysisMode) => void;
-  // Modelo de IA (selector compacto na toolbar)
-  modelId?: ModelValue;
-  onModelChange?: (m: ModelValue) => void;
+  // Modelos vêm de Configurações → IA
 }
 
 export function ChatInputBar({
@@ -55,8 +53,6 @@ export function ChatInputBar({
   attachments,
   analysisMode,
   onAnalysisModeChange,
-  modelId,
-  onModelChange,
 }: ChatInputBarProps) {
   const { chips, uploadState, doiState, setIsAttachDialogOpen, removeChip } = attachments;
 
@@ -173,8 +169,6 @@ export function ChatInputBar({
 
           {/* Toolbar inferior */}
           <InputToolbar
-            modelId={modelId}
-            onModelChange={onModelChange}
             analysisMode={analysisMode}
             onAnalysisModeChange={onAnalysisModeChange}
           />

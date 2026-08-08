@@ -9,9 +9,14 @@
  * as queries antes de apresentá-las ao usuário.
  *
  * Usa o modelo 'strategy' via model routing.
+ *
+ * v2: usa Output.object (schema mode) para garantir JSON válido, eliminando
+ * a contradição "aspas duplas como operador booleano vs aspas duplas como
+ * delimitador JSON". Aspas simples passam a ser o operador booleano da query.
  */
 
-import { generateText } from 'ai';
+import { generateText, Output } from 'ai';
+import { z } from 'zod';
 import { getModelForTask, getModelIdForTask } from '@/lib/ai-provider';
 import { profileQuery } from '@/server/agents/query-profiler';
 import { retrieveUseCaseExamples } from '@/server/agents/use-case-rag';
@@ -21,6 +26,10 @@ export interface StrategyResult {
   queries: string[];
 }
 
+const strategySchema = z.object({
+  queries: z.array(z.string()).min(1).max(5),
+});
+
 /**
  * Gera strings de busca booleanas otimizadas para um tópico de pesquisa.
  * @param topic                 Tópico em linguagem natural (ex: "gamificação no ensino superior")
@@ -28,13 +37,13 @@ export interface StrategyResult {
  * @param previousFailedQueries Strings de busca usadas em buscas anteriores desta sessão
  *                              que retornaram poucos resultados — o agente deve evitá-las.
  *                              Fase C (IA-04): evita repetição de estratégias falhas.
- * @returns      Queries refinadas + justificativa
+ * @param maxQueriesOverride    Sobrescreve o número máximo de queries geradas
+ * @returns      Queries refinadas
  */
 export async function runStrategyAgent(
   topic: string,
   rawQueries: string[] = [],
   previousFailedQueries: string[] = [],
-  /** Fase C (Batch 4 C-2): sobrescreve o número máximo de queries geradas */
   maxQueriesOverride?: number
 ): Promise<StrategyResult> {
   logger.debug(
@@ -43,7 +52,6 @@ export async function runStrategyAgent(
 
   // Fase B (IA-02): Profila a query para calibrar o número de strings a gerar.
   const profile = profileQuery(topic);
-  // Fase C (Batch 4 C-2): cap externo tem prioridade sobre o perfil da query
   const maxQueries = maxQueriesOverride ?? profile.suggestedQueryCount;
   const profileContext = profile.summary;
 
@@ -58,14 +66,14 @@ export async function runStrategyAgent(
     : '';
 
   // Fase C (IA-04): injeta histórico de estratégias falhas para evitar repetição.
-  // O agente vê explicitamente o que NÃO funcionou e deve diversificar os termos.
   const failedSection =
     previousFailedQueries.length > 0
       ? `\n\n⚠️ BUSCAS ANTERIORES QUE RETORNARAM POUCOS RESULTADOS (NÃO repita estes termos e estratégias):\n${previousFailedQueries.map((q, i) => `${i + 1}. ${q}`).join('\n')}\nDiversifique os termos, use sinônimos alternativos e explore ângulos diferentes do tópico.`
       : '';
 
-  const { text } = await generateText({
+  const { output, finishReason } = await generateText({
     model: getModelForTask('strategy'),
+    output: Output.object({ schema: strategySchema }),
     system: `Você é um especialista em estratégias de busca bibliográfica sistemática (PRISMA/Cochrane).
 Sua tarefa: dado um tópico de pesquisa, gerar EXATAMENTE ${maxQueries} string(s) de busca otimizada(s) para a SBC OpenLib (SOL).
 
@@ -79,7 +87,7 @@ REGRAS CRÍTICAS — FORMATO DAS STRINGS DE BUSCA BOOLEANA PARA O SOL:
 1. Retorne um objeto JSON com uma chave: "queries" (array de strings). Não inclua outros campos.
 2. Gere EXATAMENTE ${maxQueries} quer${maxQueries === 1 ? 'y' : 'ies'} — nem mais, nem menos.
 3. USE operadores booleanos — o motor OJS do SOL os suporta: AND, OR, NOT e parênteses. Escreva-os SEMPRE em MAIÚSCULAS. Ex: ("ensino superior" OR "educação superior") AND "inteligência artificial".
-4. Coloque SEMPRE frases compostas entre aspas duplas: "machine learning", "ensino médio", "redes neurais". Termos simples não precisam de aspas.
+4. Coloque SEMPRE frases compostas entre aspas duplas: "machine learning", "ensino médio", "redes neurais". Termos simples não precisam de aspas. O sistema de schema valida o JSON — as aspas duplas dentro das strings serão escapadas automaticamente (\\").
 5. Estrutura recomendada: ("termo principal" OR sinônimo) AND ("contexto" OR "area"). Agrupe sinônimos com OR dentro de parênteses; combine conceitos distintos com AND.
 6. ${maxQueries >= 2 ? 'Gere pelo menos 1 query em português e 1 em inglês para maximizar o recall.' : 'Gere a query no idioma mais relevante para o tópico (português para contexto nacional, inglês para internacional).'}
 7. NOMES PRÓPRIOS (projetos, programas, siglas, instituições): PRESERVE-OS exatamente entre aspas duplas — NUNCA os traduza nem acrescente variações. ✅ OK: "Mermãs Digitais" AND ("inclusão digital" OR "educação") | ❌ PROIBIDO: "Mermãs Digitais" OR "Digital Mermaids".
@@ -92,36 +100,14 @@ ${profileContext}${fewShotContext}
 Gere as strings de busca booleana otimizadas:`,
   });
 
-  let queries: string[] = rawQueries;
-
-  try {
-    const startIdx = text.indexOf('{');
-    if (startIdx !== -1) {
-      let depth = 0;
-      let jsonStr = '';
-      for (let i = startIdx; i < text.length; i++) {
-        if (text[i] === '{') depth++;
-        else if (text[i] === '}') {
-          depth--;
-          if (depth === 0) {
-            jsonStr = text.substring(startIdx, i + 1);
-            break;
-          }
-        }
-      }
-
-      if (jsonStr) {
-        const parsed = JSON.parse(jsonStr) as { queries?: string[] };
-        if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
-          queries = parsed.queries;
-        }
-      }
-    }
-  } catch (err) {
-    logger.warn('[StrategyAgent] ⚠️ Falha ao parsear JSON — usando queries originais:', err);
+  // Schema mode garante output tipado. Se falhar (provider sem suporte), usa rawQueries.
+  if (output && Array.isArray(output.queries) && output.queries.length > 0) {
+    logger.info(`[StrategyAgent] ✅ ${output.queries.length} queries geradas (schema mode)`);
+    return { queries: output.queries };
   }
 
-  logger.info(`[StrategyAgent] ✅ ${queries.length} queries geradas`);
-
-  return { queries };
+  logger.warn(
+    `[StrategyAgent] ⚠️ Schema mode sem output válido (finishReason=${finishReason}) — usando queries originais`
+  );
+  return { queries: rawQueries };
 }

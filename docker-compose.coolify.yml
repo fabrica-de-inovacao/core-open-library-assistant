@@ -1,0 +1,78 @@
+# docker-compose.coolify.yml
+#
+# Stack para deploy no Coolify v4.
+# NÃO usar localmente — use docker-compose.yml para desenvolvimento.
+#
+# Como usar no Coolify:
+#   New Resource → Docker Compose → colar este arquivo
+#   As variáveis de ambiente são configuradas pela UI do Coolify (aba Environment).
+#   NEXT_PUBLIC_* devem ser adicionadas também em Build Arguments (são baked no bundle).
+#
+# Referência de variáveis: ver .env.example
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+    ports:
+      - '3000:3000'
+    environment:
+      # Runtime vars — referenciadas do ambiente injetado pelo Coolify
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_URL: ${AUTH_URL}
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+      REDIS_URL: ${REDIS_URL}
+      ENABLE_ARQ_WORKER: ${ENABLE_ARQ_WORKER:-1}
+      # Worker Python: referencia o serviço neste stack via nome de serviço Docker
+      PYTHON_WORKER_URL: ${PYTHON_WORKER_URL:-http://python-worker:8000}
+      WORKER_API_KEY: ${WORKER_API_KEY}
+      # LLM config (todos opcionais — têm fallback no código)
+      LLM_PROVIDER: ${LLM_PROVIDER:-google}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_MODEL_ORCHESTRATOR: ${LLM_MODEL_ORCHESTRATOR:-}
+      LLM_MODEL_SYNTHESIS: ${LLM_MODEL_SYNTHESIS:-}
+      LLM_MODEL_STRATEGY: ${LLM_MODEL_STRATEGY:-}
+      LLM_MODEL_RERANKER: ${LLM_MODEL_RERANKER:-}
+      LLM_MODEL_TLDR: ${LLM_MODEL_TLDR:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-gemini-embedding-001}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+      LOG_MODE: production
+    restart: unless-stopped
+    depends_on:
+      python-worker:
+        condition: service_healthy
+
+  python-worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    ports:
+      - '8000:8000'
+    # SEM volume mount — a imagem já contém o código (diferente do dev)
+    environment:
+      PYTHONUNBUFFERED: '1'
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      AUTH_SECRET: ${AUTH_SECRET}
+      USER_SECRET_ENCRYPTION_KEY: ${USER_SECRET_ENCRYPTION_KEY:-}
+      ENABLE_ARQ_WORKER: ${ENABLE_ARQ_WORKER:-1}
+      WORKER_API_KEY: ${WORKER_API_KEY}
+      WORKERS: ${EXTRACTION_UVICORN_WORKERS:-2}
+      EXTRACTION_WORKERS: ${EXTRACTION_WORKERS:-}
+      MAX_CONCURRENT_EXTRACTIONS: ${MAX_CONCURRENT_EXTRACTIONS:-}
+      OCR_PAGE_CHUNK_SIZE: ${OCR_PAGE_CHUNK_SIZE:-10}
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

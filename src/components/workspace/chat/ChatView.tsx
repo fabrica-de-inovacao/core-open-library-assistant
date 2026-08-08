@@ -62,9 +62,7 @@ interface ChatViewProps {
   /** Modo de análise unificado (substitui searchLimit + synthesisMode) */
   analysisMode?: AnalysisMode;
   onAnalysisModeChange?: (m: AnalysisMode) => void;
-  /** Modelo de IA — selector compacto no ChatInputBar */
-  modelId?: ModelValue;
-  onModelChange?: (m: ModelValue) => void;
+  // Modelos vêm de Configurações → IA; sem seletor no workspace
   /** Abre modal de login — recebe o texto pendente para retomar após login */
   onShowLoginModal?: (pendingText?: string) => void;
 }
@@ -80,8 +78,6 @@ export function ChatView({
   attachments,
   analysisMode = 'auto',
   onAnalysisModeChange,
-  modelId,
-  onModelChange,
   onShowLoginModal,
 }: ChatViewProps) {
   const {
@@ -352,8 +348,7 @@ export function ChatView({
                 attachments={attachments}
                 analysisMode={analysisMode}
                 onAnalysisModeChange={onAnalysisModeChange}
-                modelId={modelId}
-                onModelChange={onModelChange}
+
               />
             </div>
           </div>

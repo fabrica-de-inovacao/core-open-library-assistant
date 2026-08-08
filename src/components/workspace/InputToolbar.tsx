@@ -15,17 +15,13 @@
 import { Globe, Cpu, ChevronDown, Check, Wand2, Zap, BookOpen } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { MODEL_OPTIONS, type ModelValue, type AnalysisMode } from '@/hooks/useSearchSettings';
+import { MODEL_OPTIONS, type AnalysisMode } from '@/hooks/useSearchSettings';
 
 // ---------------------------------------------------------------------------
 // Tipos
 // ---------------------------------------------------------------------------
 
 export interface InputToolbarProps {
-  // Modelo de IA
-  modelId?: ModelValue;
-  onModelChange?: (m: ModelValue) => void;
-
   // Modo de análise unificado (substitui synthesisMode + searchLimit separados)
   analysisMode?: AnalysisMode;
   onAnalysisModeChange?: (m: AnalysisMode) => void;
@@ -82,8 +78,6 @@ const ANALYSIS_OPTIONS: {
 // ---------------------------------------------------------------------------
 
 export function InputToolbar({
-  modelId,
-  onModelChange,
   analysisMode = 'auto',
   onAnalysisModeChange,
   leftSlot,
@@ -96,53 +90,19 @@ export function InputToolbar({
       {/* Slot esquerdo (ex: botão Anexar no HomeView) */}
       {leftSlot}
 
-      {/* Popover de modelo */}
-      {modelId && onModelChange && (
-        <>
-          <Popover>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-foreground hover:bg-accent/50 flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors"
-                  >
-                    <Cpu className="h-3 w-3 shrink-0" />
-                    <span className="text-[10px] leading-none font-medium">
-                      {MODEL_OPTIONS.find((m) => m.value === modelId)?.label ?? modelId}
-                    </span>
-                    <ChevronDown className="h-2.5 w-2.5 opacity-50" />
-                  </button>
-                </PopoverTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="top" sideOffset={8} className="text-xs">
-                Modelo de IA
-              </TooltipContent>
-            </Tooltip>
-            <PopoverContent side="top" align="start" sideOffset={8} className="w-64 p-1">
-              {MODEL_OPTIONS.map((m) => (
-                <button
-                  key={m.value}
-                  type="button"
-                  onClick={() => onModelChange(m.value)}
-                  className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
-                    modelId === m.value ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'
-                  }`}
-                >
-                  <Check
-                    className={`h-3 w-3 shrink-0 ${
-                      modelId === m.value ? 'opacity-100' : 'opacity-0'
-                    }`}
-                  />
-                  <span className="font-medium">{m.label}</span>
-                  <span className="text-muted-foreground ml-auto shrink-0">{m.description}</span>
-                </button>
-              ))}
-            </PopoverContent>
-          </Popover>
-          <div className="bg-border/40 h-3 w-px shrink-0" />
-        </>
-      )}
+      {/* Indicador de provider — modelos vêm de Configurações → IA */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="text-muted-foreground flex items-center gap-1 rounded-md px-1.5 py-0.5">
+            <Cpu className="h-3 w-3 shrink-0" />
+            <span className="text-[10px] leading-none font-medium">Config. IA</span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={8} className="text-xs">
+          Provider e modelo vêm de Configurações → Modelos / IA
+        </TooltipContent>
+      </Tooltip>
+      <div className="bg-border/40 h-3 w-px shrink-0" />
 
       {/* Indicador de cobertura — só ícone para economizar espaço */}
       <Tooltip>

@@ -1,7 +1,8 @@
 ﻿/* eslint-disable @typescript-eslint/no-explicit-any */
 import { streamText, stepCountIs, convertToModelMessages, generateText } from 'ai';
 import { auth } from '@/auth';
-import { getModelForTask, getModelIdForTask, getModelById } from '@/lib/ai-provider';
+import { getModelIdForTask } from '@/lib/ai-provider';
+import { getUserModel } from '@/server/llm/client';
 import { db } from '@/server/db';
 import { articles, searchQueries, chatSessions } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
@@ -386,14 +387,8 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
   }
 
   // P-22: usa o modelo solicitado pelo cliente (se fornecido) ou o padrão da task
-  const modelId =
-    typeof requestedModelId === 'string' && requestedModelId
-      ? requestedModelId
-      : getModelIdForTask('orchestrator');
-  const orchestratorModel =
-    typeof requestedModelId === 'string' && requestedModelId
-      ? getModelById(requestedModelId)
-      : getModelForTask('orchestrator');
+  const modelId = getModelIdForTask('orchestrator');
+  const orchestratorModel = await getUserModel(session?.user?.id ?? null, 'orchestrator');
 
   logger.info('[Chat] ── request ──────────────────────────');
   logger.info('[Chat] messages count :', modifiedMessages.length);
@@ -421,7 +416,7 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
 
   // Comprime o histórico quando necessário para evitar context overflow.
   // V2: usa cache do DB — LLM só chamado quando o cache está ausente ou vencido.
-  const summarizerModel = getModelForTask('tldr');
+  const summarizerModel = await getUserModel(session?.user?.id ?? null, 'tldr');
   const {
     messages: compressedMessages,
     compressed,
@@ -718,9 +713,9 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
               messages[0]?.content ??
               '';
             if (firstUserText) {
-              getModelForTask('tldr'); // warm up (já instanciado)
+              const titleModel = await getUserModel(session?.user?.id ?? null, 'tldr');
               generateText({
-                model: getModelForTask('tldr'),
+                model: titleModel,
                 prompt: `Gere um título CURTO (máximo 6 palavras) em Português do Brasil para uma sessão de pesquisa acadêmica iniciada com esta mensagem do usuário. Retorne APENAS o título, sem aspas, sem pontuação final.\n\nMensagem: ${String(firstUserText).slice(0, 300)}`,
               })
                 .then(({ text: generatedTitle }) => {

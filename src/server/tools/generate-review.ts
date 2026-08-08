@@ -116,7 +116,10 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
           const { embedding } = await embed({
             model: getEmbeddingModel(),
             value: topic.slice(0, 2000),
-            providerOptions: { google: { outputDimensionality: 768 } },
+            providerOptions: {
+              openai: { dimensions: 768 },
+              google: { outputDimensionality: 768 },
+            },
           });
           queryEmbedding = embedding;
           logger.info(

@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { db } from '@/server/db';
 import { chatSessions, searchQueries, articles } from '@/server/db/schema';
-import { inngest } from '@/server/inngest/client';
+import { enqueueArticleBatch } from '@/server/queue/client';
 import { CrossRefResponseSchema } from '@/lib/schemas/crossref';
 import { logger } from '@/lib/logger';
 
@@ -157,14 +157,12 @@ export async function POST(req: NextRequest) {
     })
     .returning({ id: articles.id, title: articles.title });
 
-  // ── 4. Enfileirar Inngest ─────────────────────────────────────────────────
-  await inngest.send({
-    name: 'app/process.articles.batch',
-    data: {
-      query_id: query.id,
-      article_ids: [article.id],
-      user_id: userId,
-    },
+  // ── 4. Enfileirar processamento ────────────────────────────────────────────
+  await enqueueArticleBatch({
+    query_id: query.id,
+    article_ids: [article.id],
+    user_id: userId,
+    skip_relevance_gate: true,
   });
 
   logger.info(

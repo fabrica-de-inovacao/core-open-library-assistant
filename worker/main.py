@@ -51,7 +51,7 @@ from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
-import fitz  # PyMuPDF
+import pymupdf
 import httpx
 import pytesseract
 from bs4 import BeautifulSoup
@@ -75,16 +75,19 @@ API_KEY: str = os.getenv("WORKER_API_KEY", "your_secret_worker_key_here")
 
 # Processos separados para extração CPU-bound.
 # Oracle A1 (4 vCPU) → 4 processos. Ajustável para ambientes menores.
-CPU_WORKERS: int = int(os.getenv("EXTRACTION_WORKERS", str(os.cpu_count() or 2)))
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    return int(raw) if raw else default
+
+
+CPU_WORKERS: int = _int_env("EXTRACTION_WORKERS", os.cpu_count() or 2)
 
 # Máximo de extrações simultâneas aceitas (backpressure).
 # Regra de ouro: 2× CPU_WORKERS — deixa margem de I/O para downloads.
-MAX_CONCURRENT_EXTRACTIONS: int = int(
-    os.getenv("MAX_CONCURRENT_EXTRACTIONS", str(CPU_WORKERS * 2))
-)
+MAX_CONCURRENT_EXTRACTIONS: int = _int_env("MAX_CONCURRENT_EXTRACTIONS", CPU_WORKERS * 2)
 
 # Páginas por chunk no OCR. 10 páginas @300dpi ≈ 15-30 MB por chunk.
-OCR_PAGE_CHUNK_SIZE: int = int(os.getenv("OCR_PAGE_CHUNK_SIZE", "10"))
+OCR_PAGE_CHUNK_SIZE: int = _int_env("OCR_PAGE_CHUNK_SIZE", 10)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +178,7 @@ def _pymupdf_extract(pdf_bytes: bytes) -> str:
 
     try/finally: fitz aloca páginas em memória nativa C — sem close(), leak permanente.
     """
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     try:
         return "\n".join(page.get_text("text") for page in doc)
     finally:
@@ -196,7 +199,7 @@ def _ocr_extract_chunked(pdf_bytes: bytes, chunk_size: int) -> str:
     Tesseract: usa PyMuPDF para contar páginas (mais rápido que abrir com pdf2image
     só para isso).
     """
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     try:
         total_pages = doc.page_count
     finally:
@@ -227,6 +230,9 @@ async def _download_pdf(url: str) -> bytes:
     """Download do PDF com timeout configurado no cliente singleton."""
     response = await _http_client.get(url)
     response.raise_for_status()
+    content_type = response.headers.get("content-type", "").lower()
+    if "pdf" not in content_type and not response.content.lstrip().startswith(b"%PDF"):
+        raise ValueError(f"URL não retornou PDF (content-type={content_type or 'unknown'})")
     return response.content
 
 
@@ -244,8 +250,17 @@ async def _resolve_pdf_url(landing_page_url: str) -> Optional[str]:
         return None
 
     soup = BeautifulSoup(response.text, "html.parser")
-    pdf_tag = soup.find("a", class_=re.compile("pdf")) or soup.find(
-        "a", href=re.compile(r"/download/|/view/")
+
+    # Prioridade: metatags citation_pdf_url, links explícitos PDF, depois OJS /view → /download.
+    meta_pdf = soup.find("meta", attrs={"name": re.compile(r"citation_pdf_url", re.I)})
+    if meta_pdf and meta_pdf.get("content"):
+        return str(meta_pdf["content"])
+
+    pdf_tag = (
+        soup.find("a", href=re.compile(r"\.pdf($|[?#])", re.I))
+        or soup.find("a", class_=re.compile("pdf", re.I))
+        or soup.find("a", string=re.compile(r"pdf", re.I))
+        or soup.find("a", href=re.compile(r"/download/|/view/", re.I))
     )
 
     if pdf_tag and pdf_tag.get("href"):

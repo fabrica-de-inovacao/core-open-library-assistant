@@ -10,6 +10,7 @@ import { articles, searchQueries } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { logger } from '@/lib/logger';
 import type { ToolContext } from './propose-search';
+import { enqueueArticleBatch } from '@/server/queue/client';
 
 const doiSchema = z.object({
   doi: z
@@ -104,10 +105,11 @@ export function buildAddArticleByDoiTool(ctx: ToolContext) {
           return { success: false, error: 'Artigo com esse DOI já existe na pesquisa.' };
         }
 
-        const { inngest } = await import('@/server/inngest/client');
-        await inngest.send({
-          name: 'app/process.articles.batch',
-          data: { query_id, article_ids: [inserted.id], user_id: ctx.sessionUserId ?? 'anonymous' },
+        await enqueueArticleBatch({
+          query_id,
+          article_ids: [inserted.id],
+          user_id: ctx.sessionUserId ?? 'anonymous',
+          skip_relevance_gate: true,
         });
 
         logger.info(`[Tool] add_article_by_doi OK | id=${inserted.id} | title=${title}`);

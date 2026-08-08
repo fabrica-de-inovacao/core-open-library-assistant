@@ -12,7 +12,6 @@ import { searchQueries } from '@/server/db/schema';
 import { runStrategyAgent } from '@/server/agents/strategy-agent';
 import type { SynthesisDepth } from '@/server/agents/synthesis-agent';
 import { getEmbeddingModel } from '@/lib/ai-provider';
-import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 
 /** Artigo retornado pelo RPC match_articles do Supabase (RAG de Cache) */
@@ -143,24 +142,42 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
             const { embedding } = await embed({
               model: getEmbeddingModel(),
               value: storedOriginalQuery.slice(0, 2000),
-              providerOptions: { google: { outputDimensionality: 768 } },
+              providerOptions: {
+                openai: { dimensions: 768 },
+                google: { outputDimensionality: 768 },
+              },
             });
             queryEmbeddingVec = embedding;
             logger.info(
               `[Tool] 🧮 Query embedding gerado | dims=${embedding.length} | topic="${storedOriginalQuery.slice(0, 60)}…"`
             );
 
-            // Pré-busca semântica na base própria via RPC Supabase
-            const { data: matches, error: rpcErr } = await supabase.rpc('match_articles', {
-              query_embedding: embedding,
-              match_threshold: 0.75,
-              match_count: 20,
-              p_user_id: ctx.sessionUserId ?? null,
-            });
-            if (rpcErr) {
-              logger.warn('[Tool] ⚠️ match_articles RPC error:', rpcErr.message);
-            } else if (matches && (matches as CachedArticleMatch[]).length > 0) {
-              cachedArticles = matches as CachedArticleMatch[];
+            const embeddingLiteral = JSON.stringify(embedding);
+            const matches = await db.execute(sql`
+              SELECT
+                a.id,
+                a.title,
+                a.doi,
+                a.abstract,
+                a.tldr_content,
+                a.source_name,
+                a.publication_year,
+                a.citation_count,
+                a.original_url,
+                1 - (a.abstract_embedding <=> ${embeddingLiteral}::vector) AS similarity
+              FROM articles a
+              INNER JOIN search_queries sq ON sq.id = a.query_id
+              WHERE
+                a.abstract_embedding IS NOT NULL
+                AND a.status IN ('done', 'abstract_only')
+                AND (${ctx.sessionUserId}::text IS NULL OR sq.user_id = ${ctx.sessionUserId})
+                AND 1 - (a.abstract_embedding <=> ${embeddingLiteral}::vector) > 0.75
+              ORDER BY a.abstract_embedding <=> ${embeddingLiteral}::vector
+              LIMIT 20
+            `);
+
+            if (matches.length > 0) {
+              cachedArticles = matches as unknown as CachedArticleMatch[];
               logger.info(
                 `[Tool] 🗃️ RAG Cache: ${cachedArticles.length} artigos similares na base própria (threshold=0.75)`
               );
@@ -286,28 +303,29 @@ export function buildProposeSearchGlobalDatabaseTool(ctx: ToolContext) {
   return tool({
     description:
       'Propõe uma busca na base científica global OpenAlex. Regras críticas para a query: ' +
-      '(1) Termos genéricos SEMPRE em inglês. ' +
-      '(2) Se o usuário citou um nome próprio de projeto, programa, empresa ou equipe (ex: "Mermãs Digitais", "ProInfo"), INCLUA-O ENTRE ASPAS DUPLAS na query — ele pode estar indexado no OpenAlex. O sistema tenta automaticamente uma busca sem o nome próprio caso não encontre resultados. ' +
-      '(3) Combine o nome próprio com conceitos gerais em inglês: ex: "\"Mermãs Digitais\" AND (education OR \"digital inclusion\")". ' +
-      '(4) Para buscas puramente conceituais (sem nome próprio), use apenas termos em inglês. ' +
-      '(5) Prefira queries simples a queries booleanas complexas.',
+      '(1) Retorne uma query OpenAlex-ready, em inglês, com termos acadêmicos internacionais. ' +
+      '(2) NÃO use sintaxe booleana: sem AND, OR, NOT, aspas duplas ou parênteses. OpenAlex usa search=full-text simples. ' +
+      '(3) Traduza conceitos em português para inglês antes de pesquisar. Ex: "Uso de Inteligência Artificial em Órgãos Públicos" → "artificial intelligence public administration government agencies". ' +
+      '(4) Nomes próprios locais em português devem virar conceitos em inglês, não nomes literais. Ex: "Mermãs Digitais" → "digital inclusion women computing education". ' +
+      '(5) Use 6 a 12 palavras, sem pontuação desnecessária.',
     inputSchema: z.object({
       query: z
         .string()
         .describe(
-          'String de busca para o OpenAlex. Se o input do usuário contém nome próprio de projeto/programa/empresa, inclua-o entre aspas duplas e adicione conceitos em inglês como contexto. Ex. com nome próprio: "\"Mermãs Digitais\" AND (education OR \"digital inclusion\")" ou "\"ProInfo\" AND Brazil AND education". Ex. sem nome próprio: "digital inclusion women education computing"'
+          'Query OpenAlex-ready em inglês, sem operadores booleanos, sem aspas e sem parênteses. Ex: "artificial intelligence public administration government agencies" ou "digital inclusion women computing education".'
         ),
     }),
     execute: async (input) => {
       const { query: rawQuery } = input;
 
-      // Sanitiza delimitadores que o LLM ocasionalmente injeta na query:
-      // triple-quotes ('''...'''), backticks, aspas simples/duplas externas.
-      // Ex: "'''AI water consumption'''" → "AI water consumption"
+      // Guarda-corpo: OpenAlex search= não usa sintaxe booleana estilo SOL.
       const query = rawQuery
         .replace(/^'{3}|'{3}$/g, '') // remove ''' do início/fim
         .replace(/^"{3}|"{3}$/g, '') // remove """ do início/fim
         .replace(/^`+|`+$/g, '') // remove backticks externos
+        .replace(/["'()]/g, ' ')
+        .replace(/\b(AND|OR|NOT)\b/gi, ' ')
+        .replace(/\s+/g, ' ')
         .trim();
 
       if (query !== rawQuery) {

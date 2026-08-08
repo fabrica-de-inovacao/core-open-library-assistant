@@ -1,171 +1,56 @@
-/**
- * @file ai-provider.ts
- * @description Plug-and-play LLM provider adapter, compatível com ai@4.x.
- *
- * Configure via .env:
- *   LLM_PROVIDER        = "google" | "openai"
- *   LLM_MODEL           = modelo global (fallback para todas as tasks)
- *   LLM_MODEL_TLDR      = modelo específico para geração de TL;DRs em batch (Inngest)
- *   LLM_MODEL_SYNTHESIS = modelo específico para síntese da revisão sistemática
- *   LLM_MODEL_RERANKER  = modelo específico para reranking semântico
- *
- * Versões: ai@6.0.105, @ai-sdk/google@3.0.34, @ai-sdk/openai@3.0.37, @ai-sdk/react@3.0.107
- * Compatibilidade: todos usam @ai-sdk/provider@3.0.8 + @ai-sdk/provider-utils@4.0.16 (sem conflitos nested).
- */
-
-import { google } from '@ai-sdk/google';
-import { openai } from '@ai-sdk/openai';
 import type { EmbeddingModel, LanguageModel } from 'ai';
+import { createEmbedding, createLanguageModel, type LlmRuntimeConfig } from '@/lib/llm/adapters';
+import { defaultModel, isLlmProvider, type LlmProvider } from '@/lib/llm/registry';
 
-// P-03 FIX: usa o singleton 'google' padrão do pacote para embeddings.
-// createGoogleGenerativeAI com baseURL customizada causava 404 em v1 e v1beta.
-// O singleton 'google' já está corretamente configurado para v1beta.
-
-/** Dimensões do modelo de embedding padrão (text-embedding-004 = 768). */
 export const EMBEDDING_DIMENSIONS = 768;
 
-type SupportedProvider = 'google' | 'openai';
-
-/**
- * Tarefas de agente suportadas.
- * Cada task pode usar um modelo diferente para balancear custo vs. qualidade.
- *
- * - orchestrator: chat principal, multi-step, tool calling
- * - synthesis:    geração da revisão sistemática (texto longo, alta qualidade)
- * - reranker:     avaliação de relevância semântica (curto, rápido)
- * - tldr:         geração de TL;DRs em batch no Inngest (barato, volume alto)
- * - strategy:     planejamento de queries de busca (quality over cost)
- */
 export type AgentTask = 'orchestrator' | 'synthesis' | 'reranker' | 'tldr' | 'strategy';
 
-/**
- * Mapeamento de modelos por provider e task.
- * Lógica: tasks de alto volume (tldr, reranker) usam modelos leves;
- *         tasks de alta qualidade (orchestrator, synthesis) usam modelos premium.
- */
-const TASK_MODELS: Record<SupportedProvider, Record<AgentTask, string>> = {
-  google: {
-    orchestrator: 'gemini-2.5-flash',
-    synthesis: 'gemini-2.5-flash',
-    strategy: 'gemini-1.5-flash', // strings de busca: volume médio, custo menor
-    reranker: 'gemini-1.5-flash',
-    tldr: 'gemini-1.5-flash', // volume alto, custo menor
-  },
-  openai: {
-    orchestrator: 'gpt-4o',
-    synthesis: 'gpt-4o',
-    strategy: 'gpt-4o-mini',
-    reranker: 'gpt-4o-mini',
-    tldr: 'gpt-4o-mini',
-  },
+const TASK_ENV: Record<AgentTask, string> = {
+  orchestrator: 'LLM_MODEL_ORCHESTRATOR',
+  synthesis: 'LLM_MODEL_SYNTHESIS',
+  reranker: 'LLM_MODEL_RERANKER',
+  tldr: 'LLM_MODEL_TLDR',
+  strategy: 'LLM_MODEL_STRATEGY',
 };
 
-/**
- * Retorna um LanguageModel para uma task específica.
- * Hierarquia de override (envs):
- *   LLM_MODEL_{TASK} > LLM_MODEL > TASK_MODELS[provider][task]
- *
- * @example
- * // Inngest TL;DR step — modelo leve
- * const { text } = await generateText({ model: getModelForTask('tldr'), ... });
- *
- * // Chat route — modelo premium
- * const result = await streamText({ model: getModelForTask('orchestrator'), ... });
- */
+function envProvider(): LlmProvider {
+  const provider = process.env.LLM_PROVIDER?.toLowerCase();
+  return isLlmProvider(provider) ? provider : 'google';
+}
+
+function envConfig(): LlmRuntimeConfig {
+  const provider = envProvider();
+  return {
+    provider,
+    models: {
+      orchestrator: process.env.LLM_MODEL_ORCHESTRATOR || process.env.LLM_MODEL || defaultModel(provider, 'orchestrator'),
+      synthesis: process.env.LLM_MODEL_SYNTHESIS || process.env.LLM_MODEL || defaultModel(provider, 'synthesis'),
+      reranker: process.env.LLM_MODEL_RERANKER || process.env.LLM_MODEL || defaultModel(provider, 'reranker'),
+      tldr: process.env.LLM_MODEL_TLDR || process.env.LLM_MODEL || defaultModel(provider, 'tldr'),
+      strategy: process.env.LLM_MODEL_STRATEGY || process.env.LLM_MODEL || defaultModel(provider, 'strategy'),
+      embedding: process.env.EMBEDDING_MODEL || defaultModel(provider === 'groq' ? 'google' : provider, 'embedding'),
+    },
+  };
+}
+
 export function getModelForTask(task: AgentTask): LanguageModel {
-  const provider = (process.env.LLM_PROVIDER ?? 'google').toLowerCase() as SupportedProvider;
-
-  // Permite override por task: LLM_MODEL_TLDR, LLM_MODEL_SYNTHESIS, etc.
-  const envKey = `LLM_MODEL_${task.toUpperCase()}` as keyof NodeJS.ProcessEnv;
-  const modelId =
-    (process.env[envKey] as string | undefined) ??
-    process.env.LLM_MODEL ??
-    TASK_MODELS[provider]?.[task] ??
-    TASK_MODELS[provider].orchestrator;
-
-  switch (provider) {
-    case 'openai':
-      return openai(modelId) as unknown as LanguageModel;
-    case 'google':
-    default:
-      return google(modelId) as unknown as LanguageModel;
-  }
+  return createLanguageModel(envConfig(), task);
 }
 
-/**
- * Alias backward-compatible — equivalente a getModelForTask('orchestrator').
- * Mantido para não quebrar chamadas existentes.
- */
-export function getLanguageModel(): LanguageModel {
-  return getModelForTask('orchestrator');
-}
-
-/**
- * Retorna um EmbeddingModel compatível com ai@6.x para o provider configurado.
- * Usado pelo Inngest para computar embeddings de abstracts.
- *
- * Modelos:
- *   Google → gemini-embedding-001  (até 3072 dims via MRL; usamos 768 via outputDimensionality)
- *   OpenAI → text-embedding-3-small  (suporta truncamento via dimensions param)
- *
- * ATENÇÃO: text-embedding-004 e text-embedding-005 foram descontinuados na API v1beta.
- * O modelo atual é gemini-embedding-001 (lançado em junho/2025).
- * Override via env: EMBEDDING_MODEL (ex: "gemini-embedding-001")
- *
- * DIMENSÃO: o embed() em functions.ts passa providerOptions: { google: { outputDimensionality: 768 } }
- * para truncar MRL de 3072 → 768, compatível com a coluna vector(768) do Supabase.
- */
-export function getEmbeddingModel(): EmbeddingModel {
-  const provider = (process.env.LLM_PROVIDER ?? 'google').toLowerCase() as SupportedProvider;
-  const envModel = process.env.EMBEDDING_MODEL;
-  const modelId =
-    provider === 'openai'
-      ? (envModel ?? 'text-embedding-3-small')
-      : (envModel ?? 'gemini-embedding-001'); // único modelo de embedding estável v1beta
-
-  switch (provider) {
-    case 'openai':
-      return openai.embedding(modelId) as unknown as EmbeddingModel;
-    case 'google':
-    default:
-      // P-03 FIX: usa o singleton 'google' (export padrão do pacote) — já configurado
-      // corretamente para v1beta. Instância customizada causava 404 em ambas as versões.
-      return google.textEmbeddingModel(modelId) as unknown as EmbeddingModel;
-  }
-}
-
-/** O nome do modelo resolvido para uma task — útil para logging. */
-export function getModelIdForTask(task: AgentTask): string {
-  const provider = (process.env.LLM_PROVIDER ?? 'google').toLowerCase() as SupportedProvider;
-  const envKey = `LLM_MODEL_${task.toUpperCase()}` as keyof NodeJS.ProcessEnv;
-  return (
-    (process.env[envKey] as string | undefined) ??
-    process.env.LLM_MODEL ??
-    TASK_MODELS[provider]?.[task] ??
-    TASK_MODELS[provider].orchestrator
-  );
-}
-
-/** @deprecated Use getModelIdForTask('orchestrator') */
-export function getLanguageModelId(): string {
-  return getModelIdForTask('orchestrator');
-}
-
-/**
- * P-22: Retorna um LanguageModel para um modelId explícito.
- * O provider é determinado pela variável LLM_PROVIDER (env).
- * Usado pelo chat route quando o cliente envia um modelId customizado.
- *
- * @example
- * const model = getModelById('gemini-2.5-pro');
- */
 export function getModelById(modelId: string): LanguageModel {
-  const provider = (process.env.LLM_PROVIDER ?? 'google').toLowerCase() as SupportedProvider;
-  switch (provider) {
-    case 'openai':
-      return openai(modelId) as unknown as LanguageModel;
-    case 'google':
-    default:
-      return google(modelId) as unknown as LanguageModel;
-  }
+  return createLanguageModel({ ...envConfig(), models: { orchestrator: modelId } }, 'orchestrator');
+}
+
+export function getModelIdForTask(task: AgentTask): string {
+  return process.env[TASK_ENV[task]] || process.env.LLM_MODEL || defaultModel(envProvider(), task);
+}
+
+export function getEmbeddingModel(): EmbeddingModel {
+  return createEmbedding(envConfig());
+}
+
+export function getEmbeddingModelId(): string {
+  const provider = envProvider();
+  return process.env.EMBEDDING_MODEL || defaultModel(provider === 'groq' ? 'google' : provider, 'embedding');
 }

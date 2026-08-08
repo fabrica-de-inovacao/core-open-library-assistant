@@ -18,7 +18,7 @@ import { InputToolbar } from '@/components/workspace/InputToolbar';
 import { TrendingTopics } from '@/components/workspace/home/TrendingTopics';
 import { signIn } from 'next-auth/react';
 import type { useAttachments } from '@/hooks/useAttachments';
-import type { AnalysisMode, ModelValue } from '@/hooks/useSearchSettings';
+import type { AnalysisMode } from '@/hooks/useSearchSettings';
 import type { TrendingTopic } from '@/app/api/trending-topics/route';
 
 // ---------------------------------------------------------------------------
@@ -36,9 +36,7 @@ interface HomeViewProps {
   analysisMode?: AnalysisMode;
   onAnalysisModeChange?: (m: AnalysisMode) => void;
 
-  // Modelo de IA
-  modelId?: ModelValue;
-  onModelChange?: (m: ModelValue) => void;
+  // Modelos vêm de Configurações → IA; sem seletor no workspace
 
   // Anexos (PDF/DOI) — hook consolidado do useAttachments
   attachments: AttachmentsReturn;
@@ -59,8 +57,6 @@ export function HomeView({
   isLoading,
   analysisMode = 'auto',
   onAnalysisModeChange,
-  modelId,
-  onModelChange,
   attachments,
   authStatus,
   onShowLoginModal,
@@ -165,8 +161,6 @@ export function HomeView({
 
             {/* Toolbar inferior */}
             <InputToolbar
-              modelId={modelId}
-              onModelChange={onModelChange}
               analysisMode={analysisMode}
               onAnalysisModeChange={onAnalysisModeChange}
               leftSlot={

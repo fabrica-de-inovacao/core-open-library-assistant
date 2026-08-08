@@ -3,7 +3,8 @@ import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
 import { eq, inArray } from 'drizzle-orm';
 import { auth } from '@/auth';
-import { inngest } from '@/server/inngest/client';
+import { bullmqRedis } from '@/lib/redis';
+import { orchestratorQueue } from '@/server/queue/client';
 import { logger } from '@/lib/logger';
 
 export async function POST(request: Request) {
@@ -54,14 +55,13 @@ export async function POST(request: Request) {
     await db.update(articles).set({ status: 'failed' }).where(inArray(articles.id, pendingIds));
   }
 
-  // 3. Envia evento de cancelamento para o Inngest — dispara o cancelOn
-  await inngest.send({
-    name: 'app/search.cancelled',
-    data: { query_id },
-  });
+  const waitingJobs = await orchestratorQueue.getJobs(['waiting', 'delayed']);
+  const toRemove = waitingJobs.filter((job) => job.data.query_id === query_id);
+  await Promise.all(toRemove.map((job) => job.remove()));
+  await bullmqRedis.set(`cancel:${query_id}`, '1', 'EX', 300);
 
   logger.info(
-    `[Search/Cancel] 🛑 Query cancelada | query_id=${query_id} | pending_articles_marked=${pendingIds.length}`
+    `[Search/Cancel] 🛑 Query cancelada | query_id=${query_id} | pending_articles_marked=${pendingIds.length} | queued_jobs_removed=${toRemove.length}`
   );
 
   return NextResponse.json({ success: true, cancelled: query_id });

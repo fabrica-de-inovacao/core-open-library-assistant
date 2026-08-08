@@ -13,28 +13,15 @@ import {
   BookOpen,
   Check,
   Copy,
-  Cpu,
   ExternalLink,
   Loader2,
   MessagesSquare,
   Share2,
 } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MODEL_OPTIONS, type ModelValue } from '@/hooks/useSearchSettings';
-
 interface WorkspaceHeaderProps {
   hasActiveSession: boolean;
-  // Home mode
-  modelId: ModelValue;
-  onModelChange: (m: ModelValue) => void;
   // Chat mode
   sessionTitle?: string;
   articleCount?: number;
@@ -44,8 +31,6 @@ interface WorkspaceHeaderProps {
 
 export function WorkspaceHeader({
   hasActiveSession,
-  modelId,
-  onModelChange,
   sessionTitle,
   articleCount = 0,
   isSearchRunning = false,
@@ -194,23 +179,10 @@ export function WorkspaceHeader({
             </Popover>
           </>
         ) : (
-          /* ── Seletor de modelo (apenas home) ── */
-          <div className="flex items-center gap-1.5">
-            <Cpu className="text-muted-foreground h-3.5 w-3.5" />
-            <Select value={modelId} onValueChange={(val) => onModelChange(val as ModelValue)}>
-              <SelectTrigger className="h-7 w-[160px] text-xs">
-                <SelectValue placeholder="Modelo" />
-              </SelectTrigger>
-              <SelectContent>
-                {MODEL_OPTIONS.map((m) => (
-                  <SelectItem key={m.value} value={m.value} className="text-xs">
-                    <span className="font-medium">{m.label}</span>
-                    <span className="text-muted-foreground ml-1">— {m.description}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          /* ── Provider info: modelos vêm de Configurações → IA ── */
+          <span className="text-muted-foreground text-[10px]">
+            Provider em Configurações
+          </span>
         )}
       </div>
     </header>

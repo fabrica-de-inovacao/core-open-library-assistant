@@ -3,6 +3,9 @@ import type { NextConfig } from 'next';
 const isDev = process.env.NODE_ENV === 'development';
 
 const nextConfig: NextConfig = {
+  // Gera servidor standalone — necessário para deploy Docker sem yarn/node_modules completo
+  output: 'standalone',
+
   // Remove header "X-Powered-By: Next.js" — reduz exposição de stack
   poweredByHeader: false,
 

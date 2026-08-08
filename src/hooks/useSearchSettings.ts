@@ -5,7 +5,6 @@
  *
  * Gerencia as preferências de busca persistidas em localStorage:
  * - analysisMode ('auto' | 'quick' | 'extended') — unifica searchLimit + synthesisMode
- * - modelId (modelo Gemini selecionado)
  *
  * Mapeamento de analysisMode:
  *   'quick'    → 10 artigos + síntese quick_lookup
@@ -20,18 +19,11 @@ import { useState } from 'react';
 // ---------------------------------------------------------------------------
 
 export const MODEL_OPTIONS = [
-  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Equilibrado (padrão)' },
-  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Alta qualidade' },
-  { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', description: 'Econômico' },
-  {
-    value: 'gemini-2.5-flash-lite-preview-04-17',
-    label: 'Gemini 2.5 Flash Lite',
-    description: 'Testes (lite)',
-  },
+  { value: 'user-settings', label: 'Configuração do usuário', description: 'Padrão' },
 ] as const;
 
 export type ModelValue = (typeof MODEL_OPTIONS)[number]['value'];
-export const DEFAULT_MODEL: ModelValue = 'gemini-2.5-flash';
+export const DEFAULT_MODEL: ModelValue = 'user-settings';
 
 // ---------------------------------------------------------------------------
 // Analysis Mode — unifica searchLimit + synthesisMode em um único parâmetro
@@ -100,18 +92,8 @@ export function useSearchSettings(): UseSearchSettingsReturn {
     }
   };
 
-  // ── modelId ──────────────────────────────────────────────────────────────
-  // Lazy initializer: lê localStorage uma única vez antes do primeiro render
-  const [modelId, setModelIdState] = useState<ModelValue>(() => {
-    if (typeof window === 'undefined') return DEFAULT_MODEL;
-    const stored = localStorage.getItem('sol-model') as ModelValue | null;
-    return stored ?? DEFAULT_MODEL;
-  });
-
-  const setModelId = (m: ModelValue) => {
-    setModelIdState(m);
-    localStorage.setItem('sol-model', m);
-  };
+  const modelId = DEFAULT_MODEL;
+  const setModelId = () => {};
 
   const { searchLimit } = analysisModeToSettings(analysisMode);
 

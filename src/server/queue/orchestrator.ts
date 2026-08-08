@@ -1,0 +1,110 @@
+import { Worker, type Job } from 'bullmq';
+import { generateText } from 'ai';
+import { and, eq, inArray, notInArray } from 'drizzle-orm';
+import { bullmqRedis } from '@/lib/redis';
+import { getModelForTask } from '@/lib/ai-provider';
+import { logger } from '@/lib/logger';
+import { db } from '@/server/db';
+import { articles, searchQueries } from '@/server/db/schema';
+import type { ArticleOrchestrationJob } from './jobs';
+
+async function runRelevanceGate(queryId: string, skipRelevanceGate?: boolean) {
+  if (skipRelevanceGate) return { proceed: true, reason: 'openalex_skip' };
+
+  const [qData] = await db
+    .select({ originalQuery: searchQueries.originalQuery, expandedQuery: searchQueries.expandedQuery })
+    .from(searchQueries)
+    .where(eq(searchQueries.id, queryId))
+    .limit(1);
+
+  if (qData?.expandedQuery === 'source:openalex') return { proceed: true, reason: 'openalex_skip' };
+
+  const topic = qData?.originalQuery ?? '';
+  const allTitles = await db
+    .select({ title: articles.title })
+    .from(articles)
+    .where(eq(articles.queryId, queryId));
+
+  if (allTitles.length === 0) return { proceed: true, reason: 'no_titles' };
+
+  const titlesContext = allTitles.map((a, i) => `${i + 1}. ${a.title}`).join('\n');
+  let analysis: { relevant: boolean; relevant_count: number; reason: string } = {
+    relevant: true,
+    relevant_count: allTitles.length,
+    reason: '',
+  };
+
+  try {
+    const { text } = await generateText({
+      model: getModelForTask('tldr'),
+      providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
+      abortSignal: AbortSignal.timeout(20_000),
+      system:
+        'Você é um avaliador de relevância de literatura científica. Responda APENAS com JSON válido, sem markdown.',
+      prompt: `Tópico de pesquisa: "${topic}"\n\nTítulos dos artigos encontrados:\n${titlesContext}\n\nEsses artigos são relevantes para o tópico acima? Responda APENAS com JSON no formato: {"relevant":true/false,"relevant_count":<n>,"reason":"<brevíssima justificativa em pt-BR>"}`,
+    });
+    analysis = JSON.parse(text.trim().replace(/^```json\n?/, '').replace(/\n?```$/, '')) as typeof analysis;
+  } catch (err) {
+    logger.warn('[BullMQ] Relevance check falhou, assumindo relevante:', (err as Error).message);
+    return { proceed: true, reason: 'llm_error' };
+  }
+
+  if (!analysis.relevant || analysis.relevant_count < 3) {
+    await db
+      .update(searchQueries)
+      .set({ status: 'needs_refinement', summary: JSON.stringify(analysis) })
+      .where(eq(searchQueries.id, queryId));
+    await db
+      .update(articles)
+      .set({ status: 'failed' })
+      .where(and(eq(articles.queryId, queryId), eq(articles.status, 'pending')));
+    return { proceed: false, reason: 'not_relevant' };
+  }
+
+  return { proceed: true, reason: 'ok' };
+}
+
+export function startOrchestratorWorker() {
+  const worker = new Worker<ArticleOrchestrationJob>(
+    'core.article.orchestrate',
+    async (job: Job<ArticleOrchestrationJob>) => {
+      const { article_ids, query_id, skip_relevance_gate } = job.data;
+      const relevanceGate = await runRelevanceGate(query_id, skip_relevance_gate);
+
+      if (!relevanceGate.proceed) return { success: false, skipped: true };
+
+      // v2 step 1: keep existing Python HTTP worker path until arq worker lands.
+      // This removes Inngest durability risk now, without rewriting the PDF pipeline yet.
+      for (const articleId of article_ids) {
+        await bullmqRedis.lpush(
+          'core:article.process.pending',
+          JSON.stringify({ ...job.data, article_id: articleId })
+        );
+      }
+
+      logger.info(`[BullMQ] Fan-out placeholder: ${article_ids.length} artigo(s) | query_id=${query_id}`);
+      return { success: true, dispatched: article_ids.length };
+    },
+    { connection: bullmqRedis, concurrency: 5 }
+  );
+
+  worker.on('failed', async (job, err) => {
+    if (!job) return;
+    logger.error('[BullMQ] Orquestrador falhou:', err);
+    await db
+      .update(articles)
+      .set({ status: 'failed' })
+      .where(
+        and(
+          eq(articles.queryId, job.data.query_id),
+          notInArray(articles.status, ['done', 'abstract_only', 'failed'])
+        )
+      );
+    await db
+      .update(searchQueries)
+      .set({ status: 'needs_refinement' })
+      .where(eq(searchQueries.id, job.data.query_id));
+  });
+
+  return worker;
+}

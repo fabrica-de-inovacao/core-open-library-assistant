@@ -7,6 +7,7 @@ import { auth } from '@/auth';
 import { logger } from '@/lib/logger';
 import { OpenAlexResponseSchema } from '@/lib/schemas/openalex';
 import { rateLimit, getClientIp } from '@/lib/rate-limit';
+import { enqueueArticleBatch } from '@/server/queue/client';
 
 // F-04: 10 buscas globais por minuto por usuário/IP
 const globalSearchLimiter = rateLimit({ limit: 10, windowMs: 60_000 });
@@ -72,6 +73,15 @@ const PUBLISHER_FILTER =
 /** Filtro de idioma: inglês, português, espanhol. */
 const LANGUAGE_FILTER = 'language:en|pt|es';
 
+/** OpenAlex search= usa full-text simples; booleanos aqui reduzem recall. */
+function sanitizeOpenAlexSearchQuery(raw: string): string {
+  return raw
+    .replace(/["'()]/g, ' ')
+    .replace(/\b(AND|OR|NOT)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * Normaliza a query antes de enviar ao OpenAlex.
  * Casos cobertos:
@@ -79,10 +89,12 @@ const LANGUAGE_FILTER = 'language:en|pt|es';
  *   - `""Termo"` (aspas duplas apenas no início)          → `"Termo"`
  */
 function normalizeOpenAlexQuery(raw: string): string {
-  return raw
+  const normalized = raw
     .replace(/""([^"]+)""/g, '"$1"') // ""term"" → "term"
     .replace(/^""/, '"') // leading "" → "  (ex: ""Mermãs Digitais")
     .trim();
+
+  return sanitizeOpenAlexSearchQuery(normalized);
 }
 
 /**
@@ -127,6 +139,7 @@ function buildFallbackQuery(query: string): string | null {
  * Retorna o nome próprio se encontrado, ou null.
  */
 function extractProperName(query: string): string | null {
+  if (/\b(AND|OR|NOT)\b/i.test(query)) return null;
   const match = query.match(/"([^"]+)"/);
   return match ? match[1] : null;
 }
@@ -489,7 +502,7 @@ export async function GET(request: Request) {
         logger.info(`[GlobalSearch] ✅ ${cachedRows.length} artigos do cache inseridos`);
       }
 
-      // Insert fresh articles as pending (Inngest will process them)
+      // Insert fresh articles as pending (Queue worker will process them)
       if (toInsertFresh.length > 0) {
         await db
           .insert(articles)
@@ -530,23 +543,14 @@ export async function GET(request: Request) {
       .where(eq(searchQueries.id, queryId));
 
     if (newArticleIds.length > 0) {
-      const batchSize = 3;
-      const events = [];
-      for (let i = 0; i < newArticleIds.length; i += batchSize) {
-        const batch = newArticleIds.slice(i, i + batchSize);
-        events.push({
-          name: 'app/process.articles.batch' as const,
-          data: {
-            query_id: queryId,
-            article_ids: batch,
-            user_id: userId ?? 'anonymous',
-          },
-        });
-      }
-      const { inngest } = await import('@/server/inngest/client');
-      await inngest.send(events);
+      await enqueueArticleBatch({
+        query_id: queryId,
+        article_ids: newArticleIds,
+        user_id: userId ?? 'anonymous',
+        skip_relevance_gate: true,
+      });
       logger.info(
-        `[GlobalSearch] 🚀 ${events.length} evento(s) Inngest com ${newArticleIds.length} artigo(s)`
+        `[GlobalSearch] 🚀 Enfileirado batch com ${newArticleIds.length} artigo(s)`
       );
     } else if (allResults.length > 0) {
       // All from cache — mark done immediately

@@ -23,8 +23,7 @@ import {
   getToolOrDynamicToolName,
 } from 'ai';
 import { useChat } from '@ai-sdk/react';
-import { useSupabaseRealtime } from '@/hooks/useSupabaseRealtime';
-import { supabase } from '@/lib/supabase';
+import { useArticleStream } from '@/hooks/useArticleStream';
 import { rankArticles, type Article } from '@/lib/reranking';
 
 // Fase C (IA-04): modo de síntese selecionável pelo usuário
@@ -165,7 +164,7 @@ export function useChatOrchestration({
     sendMessageRef.current = sendMessage;
   }, [sendMessage]);
 
-  // Stable ref para refreshArticles — populado após useSupabaseRealtime estar disponível
+  // Stable ref para refreshArticles — populado após useArticleStream estar disponível
   // Necessário para re-fetch de artigos dentro do handleExecuteSearch (useCallback com [])
   const refreshArticlesRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -246,7 +245,7 @@ export function useChatOrchestration({
           reason?: string;
         };
 
-        // needs_refinement: poucos resultados (<5) — Inngest não foi acionado.
+        // needs_refinement: poucos resultados (<5) — worker não foi acionado.
         // Tratado aqui diretamente (não via Realtime de search_queries) para garantir
         // resposta imediata independente de Supabase Realtime estar habilitado na tabela.
         if (data.needs_refinement) {
@@ -283,7 +282,7 @@ export function useChatOrchestration({
         }
 
         // Fix feedback: NÃO limpa runningSearches aqui.
-        // O Inngest processa de forma assíncrona — os artigos chegam via Realtime
+        // O worker processa de forma assíncrona — os artigos chegam via Realtime
         // segundos depois. runningSearches é limpo quando o primeiro artigo chega
         // (ver useEffect de articles abaixo), evitando o gap sem indicador visual.
 
@@ -596,8 +595,8 @@ export function useChatOrchestration({
     addQueryId: addWatchedQueryId,
     refreshByChatId: refreshArticles,
     queryStatus,
-  } = useSupabaseRealtime(activeQueryId, chatId);
-  // Sincroniza refreshArticlesRef após useSupabaseRealtime estar disponível
+  } = useArticleStream(activeQueryId, chatId);
+  // Sincroniza refreshArticlesRef após useArticleStream estar disponível
   useEffect(() => {
     refreshArticlesRef.current = refreshArticles;
   }, [refreshArticles]);
@@ -973,12 +972,12 @@ export function useChatOrchestration({
       void (async () => {
         await new Promise<void>((r) => setTimeout(r, 2_000));
         if (cancelled) return;
-        const { data: dbArts } = await supabase
-          .from('articles')
-          .select('id, query_id, status, tldr_content')
-          .eq('query_id', activeQueryId)
-          .in('status', ['done', 'abstract_only']);
-        if (cancelled || !dbArts?.some((a) => a.tldr_content)) return;
+        const res = await fetch(`/api/articles?queryId=${encodeURIComponent(activeQueryId)}`);
+        if (cancelled || !res.ok) return;
+        const dbArts = ((await res.json()) as any[]).filter((a) =>
+          ['done', 'abstract_only'].includes(a.status)
+        );
+        if (!dbArts.some((a) => a.tldrContent ?? a.tldr_content)) return;
         // Combina artigos do DB com o ref atualizado (captura queries incrementais)
         const merged = [...(articleCountRef.current ?? []), ...dbArts];
         dispatchSynthesisMessage(merged);

@@ -1,4 +1,4 @@
-import type { RealtimeStatus } from '@/hooks/useSupabaseRealtime';
+import type { RealtimeStatus } from '@/hooks/useArticleStream';
 
 // ---------------------------------------------------------------------------
 // View-model para artigos exibidos no painel de extração.

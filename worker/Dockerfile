@@ -30,4 +30,5 @@ EXPOSE 8000
 #   MAX_CONCURRENT_EXTRACTIONS — semáforo de backpressure (padrão: 2 × EXTRACTION_WORKERS)
 #   OCR_PAGE_CHUNK_SIZE      — páginas por chunk no OCR (padrão: 10)
 #   WORKER_API_KEY           — token de autenticação
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS:-1}"]
+#   ENABLE_ARQ_WORKER        — quando "1", também inicia o worker Redis v2
+CMD ["sh", "-c", "if [ \"${ENABLE_ARQ_WORKER:-0}\" = \"1\" ]; then python queue_worker.py & fi; uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS:-1}"]

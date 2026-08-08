@@ -11,6 +11,7 @@ import { eq } from 'drizzle-orm';
 import { logger } from '@/lib/logger';
 import { getModelForTask } from '@/lib/ai-provider';
 import type { ToolContext } from './propose-search';
+import { enqueueArticleBatch } from '@/server/queue/client';
 
 const recommendationsSchema = z.object({
   doi: z
@@ -146,10 +147,11 @@ export function buildGetRecommendationsTool(ctx: ToolContext) {
         }
 
         if (insertedIds.length > 0) {
-          const { inngest } = await import('@/server/inngest/client');
-          await inngest.send({
-            name: 'app/process.articles.batch',
-            data: { query_id, article_ids: insertedIds, user_id: ctx.sessionUserId ?? 'anonymous' },
+          await enqueueArticleBatch({
+            query_id,
+            article_ids: insertedIds,
+            user_id: ctx.sessionUserId ?? 'anonymous',
+            skip_relevance_gate: true,
           });
         }
 

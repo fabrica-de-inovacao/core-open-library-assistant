@@ -57,6 +57,41 @@
       "when": 1772505600000,
       "tag": "0007_hnsw_and_match_articles",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1772592000000,
+      "tag": "0008_conversation_summary",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1772678400000,
+      "tag": "0009_search_queries_trending_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1772764800000,
+      "tag": "0010_synthesis_ratings",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1772851200000,
+      "tag": "0011_user_llm_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1772937600000,
+      "tag": "0012_search_queries_summary",
+      "breakpoints": true
     }
   ]
 }

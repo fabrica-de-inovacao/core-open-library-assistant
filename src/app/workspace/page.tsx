@@ -73,7 +73,7 @@ function WorkspaceShell({ initialMessages }: { initialMessages?: UIMessage[] }) 
   const router = useRouter();
 
   // ── Settings (modelo de IA + modo de análise) ────────────────────────────
-  const { analysisMode, setAnalysisMode, searchLimit, modelId, setModelId } = useSearchSettings();
+  const { analysisMode, setAnalysisMode, searchLimit } = useSearchSettings();
 
   // ── Chats recentes (para detecção de similaridade FEAT-01) ─────────────
   const { chats: recentChats } = useRecentChats(session?.user?.id);
@@ -95,7 +95,7 @@ function WorkspaceShell({ initialMessages }: { initialMessages?: UIMessage[] }) 
     urlQueryId: routeParams.chatId,
     initialMessages,
     authStatus,
-    modelId,
+
     searchLimitOverride: searchLimit,
   });
 
@@ -208,8 +208,6 @@ function WorkspaceShell({ initialMessages }: { initialMessages?: UIMessage[] }) 
       {hasActiveSession && (
         <WorkspaceHeader
           hasActiveSession={hasActiveSession}
-          modelId={modelId}
-          onModelChange={setModelId}
           chatId={orchestration.chatId}
           sessionTitle={sessionTitle}
           articleCount={orchestration.articles.length}
@@ -226,8 +224,6 @@ function WorkspaceShell({ initialMessages }: { initialMessages?: UIMessage[] }) 
           attachments={attachments}
           analysisMode={analysisMode}
           onAnalysisModeChange={setAnalysisMode}
-          modelId={modelId}
-          onModelChange={setModelId}
           onShowLoginModal={handleShowLoginModal}
         />
       )}
@@ -241,8 +237,6 @@ function WorkspaceShell({ initialMessages }: { initialMessages?: UIMessage[] }) 
           attachments={attachments}
           analysisMode={analysisMode}
           onAnalysisModeChange={setAnalysisMode}
-          modelId={modelId}
-          onModelChange={setModelId}
           onShowLoginModal={handleShowLoginModal}
         />
       )}

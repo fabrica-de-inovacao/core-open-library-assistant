@@ -70,6 +70,26 @@ export const verificationTokens = pgTable(
   })
 );
 
+export const userLlmSettings = pgTable(
+  'user_llm_settings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull().default('google'),
+    encryptedApiKey: text('encrypted_api_key'),
+    apiKeyLast4: text('api_key_last4'),
+    models: jsonb('models').$type<Record<string, string>>().notNull().default({}),
+    useOwnKey: boolean('use_own_key').notNull().default(false),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdx: uniqueIndex('user_llm_settings_user_id_idx').on(table.userId),
+  })
+);
+
 // --- Core App Tables ---
 
 // Fase 1 (P-01): chat_sessions é o objeto primário.

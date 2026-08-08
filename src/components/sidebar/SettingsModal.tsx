@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -248,45 +248,128 @@ function TabPesquisa() {
 // ── Aba: Modelos / IA ─────────────────────────────────────────────────────────
 
 function TabLLMs() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [provider, setProvider] = useState('google');
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [apiKey, setApiKey] = useState('');
+  const [useOwnKey, setUseOwnKey] = useState(false);
+  const [providers, setProviders] = useState<Record<string, { label: string; models: Record<string, string[]> }>>({});
+  const [apiKeyLast4, setApiKeyLast4] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const res = await fetch('/api/settings/llm');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (cancelled) return;
+      setProviders(data.providers ?? {});
+      if (data.settings) {
+        setProvider(data.settings.provider ?? 'google');
+        setModels(data.settings.models ?? {});
+        setUseOwnKey(Boolean(data.settings.useOwnKey));
+        setApiKeyLast4(data.settings.apiKeyLast4 ?? null);
+      }
+      setLoading(false);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const providerDef = providers[provider];
+  const save = async () => {
+    setSaving(true);
+    setTestResult(null);
+    const res = await fetch('/api/settings/llm', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, models, useOwnKey, apiKey: apiKey || undefined }),
+    });
+    setSaving(false);
+    setTestResult(res.ok ? 'Configuração salva.' : 'Falha ao salvar configuração.');
+    if (res.ok && apiKey) {
+      setApiKeyLast4(apiKey.slice(-4));
+      setApiKey('');
+    }
+  };
+
+  const test = async () => {
+    setTestResult('Testando...');
+    const res = await fetch('/api/settings/llm/test', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    setTestResult(res.ok ? `OK: ${data.text ?? ''}` : `Falhou: ${data.error ?? res.status}`);
+  };
+
+  if (loading) return <p className="text-muted-foreground text-sm">Carregando...</p>;
+
   return (
     <div className="space-y-8">
       <Section title="Provedor ativo">
-        <SettingRow label="Provedor" description="Configurado pelo administrador da instância.">
-          <Badge variant="secondary" className="font-mono text-[11px]">
-            {process.env.NEXT_PUBLIC_LLM_PROVIDER ?? 'Google Gemini'}
-          </Badge>
+        <SettingRow label="Provedor" description="Escolha o provider usado pelas respostas e agentes.">
+          <Select value={provider} onValueChange={setProvider}>
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(providers).map(([id, p]) => (
+                <SelectItem key={id} value={id}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </SettingRow>
       </Section>
 
       <Section title="Modelos em uso">
-        {[
-          { role: 'Orquestrador / Síntese', model: 'Gemini 2.5 Flash' },
-          { role: 'TL;DR / Reranker', model: 'Gemini 1.5 Flash' },
-        ].map(({ role, model }) => (
-          <SettingRow key={role} label={role}>
-            <Badge variant="secondary" className="font-mono text-[10px]">
-              {model}
-            </Badge>
+        {['orchestrator', 'synthesis', 'tldr', 'reranker', 'strategy', 'embedding'].map((task) => (
+          <SettingRow key={task} label={task}>
+            <Select
+              value={models[task] ?? providerDef?.models?.[task]?.[0] ?? ''}
+              onValueChange={(value) => setModels((prev) => ({ ...prev, [task]: value }))}
+              disabled={!providerDef?.models?.[task]?.length}
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="Sem suporte" />
+              </SelectTrigger>
+              <SelectContent>
+                {(providerDef?.models?.[task] ?? []).map((model) => (
+                  <SelectItem key={model} value={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </SettingRow>
         ))}
       </Section>
 
       <Section title="API Keys">
-        <div className="bg-muted/30 flex flex-col items-center gap-3 rounded-lg border border-dashed px-5 py-6 text-center">
-          <div className="bg-background border-border/60 flex size-10 items-center justify-center rounded-full border shadow-sm">
-            <KeyRound className="text-muted-foreground size-4" />
-          </div>
-          <div className="space-y-1">
-            <p className="text-foreground text-[13px] font-medium">Em breve</p>
-            <p className="text-muted-foreground text-[11px] leading-relaxed">
-              Configure suas próprias chaves para OpenAI, Anthropic, Google e outros provedores
-              diretamente aqui.
-            </p>
-          </div>
-          <Badge variant="outline" className="text-muted-foreground text-[10px]">
-            Roadmap
-          </Badge>
+        <SettingRow label="Usar minha chave" description="Se desligado, usa a chave do servidor.">
+          <Switch checked={useOwnKey} onCheckedChange={setUseOwnKey} />
+        </SettingRow>
+        <SettingRow label="API key" description={apiKeyLast4 ? `Chave salva: ••••${apiKeyLast4}` : 'Nenhuma chave salva.'}>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="cole sua API key"
+            className="border-input bg-background h-9 w-56 rounded-md border px-3 text-sm"
+          />
+        </SettingRow>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={test}>
+            Testar
+          </Button>
+          <Button size="sm" onClick={save} disabled={saving}>
+            {saving ? 'Salvando...' : 'Salvar IA'}
+          </Button>
         </div>
+        {testResult && <p className="text-muted-foreground text-right text-xs">{testResult}</p>}
       </Section>
     </div>
   );

@@ -3,7 +3,7 @@
 import { useCallback, useState } from 'react';
 
 export interface UserSettings {
-  /** Idioma para geração de TL;DRs pelo Inngest. 'pt-BR' é o padrão. */
+  /** Idioma para geração de TL;DRs pelo worker. 'pt-BR' é o padrão. */
   tldrLanguage: 'pt-BR' | 'en-US' | 'es';
   /** Número máximo de artigos retornados por busca. */
   articlesPerSearch: 10 | 25;

@@ -6,7 +6,7 @@ import { eq, inArray, and, sql } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
 import { auth } from '@/auth';
-import { inngest } from '@/server/inngest/client';
+import { enqueueArticleBatch } from '@/server/queue/client';
 import { rateLimit, getClientIp } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
 
@@ -408,7 +408,7 @@ export async function GET(request: Request) {
         logger.info(`[Search] ✅ ${cachedRows.length} artigos de cache inseridos`);
       }
 
-      // Insert fresh articles (need Inngest processing)
+      // Insert fresh articles (need worker processing)
       if (toInsertFresh.length > 0) {
         await db
           .insert(articles)
@@ -427,7 +427,7 @@ export async function GET(request: Request) {
           .onConflictDoNothing();
         logger.info(`[Search] ✅ ${toInsertFresh.length} artigos novos inseridos (pending)`);
 
-        // Fetch only the pending IDs (fresh ones) to dispatch to Inngest
+        // Fetch only the pending IDs (fresh ones) to dispatch to Queue worker
         const pendingArticles = await db
           .select({ id: articles.id })
           .from(articles)
@@ -477,16 +477,14 @@ export async function GET(request: Request) {
     // Queue integration — 1 único evento com todos os artigos (G2: RelevanceGate roda
     // apenas 1× no processArticlesBatch em vez de 1× por lote de 3 artigos).
     if (newArticleIds.length > 0) {
-      await inngest.send({
-        name: 'app/process.articles.batch' as const,
-        data: {
-          query_id: queryId,
-          article_ids: newArticleIds,
-          tldr_lang: tldrLang,
-          user_id: userId ?? 'anonymous',
-        },
+      await enqueueArticleBatch({
+        query_id: queryId,
+        article_ids: newArticleIds,
+        tldr_lang: tldrLang,
+        user_id: userId ?? 'anonymous',
+        skip_relevance_gate: false,
       });
-      logger.info(`[Search] 🚀 Ingestado ${newArticleIds.length} artigo(s) | query_id=${queryId}`);
+      logger.info(`[Search] 🚀 Enfileirado ${newArticleIds.length} artigo(s) | query_id=${queryId}`);
     } else if (limitedResults.length > 0) {
       // All articles were served from cache — mark query as done immediately
       await db.update(searchQueries).set({ status: 'done' }).where(eq(searchQueries.id, queryId));
