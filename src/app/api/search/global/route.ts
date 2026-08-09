@@ -344,7 +344,7 @@ export async function GET(request: Request) {
     if (queryId) {
       await db
         .update(searchQueries)
-        .set({ status: 'searching', expandedQuery: 'source:openalex' })
+        .set({ status: 'searching', expandedQuery: 'source:openalex', source: 'openalex', expectedCount: 0 })
         .where(eq(searchQueries.id, queryId));
       logger.debug(`[GlobalSearch] 📝 QueryID recebido → searching: ${queryId}`);
     } else {
@@ -379,9 +379,12 @@ export async function GET(request: Request) {
         { status: 502 }
       );
     }
-
     // Garante que o número de resultados não ultrapassa o limite configurado pelo usuário
     allResults = allResults.slice(0, articleLimit);
+    await db
+      .update(searchQueries)
+      .set({ expectedCount: allResults.length, source: 'openalex' })
+      .where(eq(searchQueries.id, queryId as string));
     logger.debug(
       `[GlobalSearch] 📊 Limite aplicado: ${articleLimit} | Resultados: ${allResults.length}`
     );

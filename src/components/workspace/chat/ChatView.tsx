@@ -87,11 +87,15 @@ export function ChatView({
     isLoading,
     chatId,
     activeQueryId,
+    collectionScope,
+    setCollectionScope,
     handleExecuteSearch,
     handleCancelSearch,
     executedProposalIds,
     runningSearches,
     articles,
+    displayArticles,
+    consolidatedArticleCount,
     queryGroups,
     hasZeroResults,
     isSearchRunning,
@@ -99,6 +103,7 @@ export function ChatView({
     realtimeStatus,
     // P-StatusBar: status da query ativa no DB (done/needs_refinement/processing/etc.)
     queryStatus,
+    activeRun,
   } = orchestration;
 
   // ── Painel lateral de extrações ─────────────────────────────────────────
@@ -249,6 +254,7 @@ export function ChatView({
 
   // ── Navegação no histórico de queries ────────────────────────────────────
   const handleSelectQuery = useCallback((queryId: string) => {
+    setCollectionScope(queryId === activeQueryId ? 'active' : queryId);
     const el = document.querySelector(`[data-query-id="${queryId}"]`) as HTMLElement;
     if (el && scrollContainerRef.current) {
       scrollContainerRef.current.scrollTo({
@@ -256,7 +262,7 @@ export function ChatView({
         behavior: 'smooth',
       });
     }
-  }, []);
+  }, [activeQueryId, setCollectionScope]);
 
   // =========================================================================
   // Render
@@ -277,7 +283,10 @@ export function ChatView({
             {queryGroups.length > 0 && (
               <QueryHistoryBar
                 groups={queryGroups}
-                activeQueryId={activeQueryId}
+                activeQueryId={collectionScope === 'active' ? activeQueryId : collectionScope === 'all' ? null : collectionScope}
+                allCount={consolidatedArticleCount}
+                isAllActive={collectionScope === 'all'}
+                onSelectAll={() => setCollectionScope('all')}
                 onSelectQuery={handleSelectQuery}
               />
             )}
@@ -330,9 +339,14 @@ export function ChatView({
             {/* Barra de status global do pipeline — P-StatusBar */}
             <PipelineStatusBar
               isSearchRunning={isSearchRunning}
-              articles={articles}
+              articles={displayArticles}
               activeQueryId={activeQueryId}
               queryStatus={queryStatus}
+              progress={activeRun ? {
+                expected: activeRun.expectedCount,
+                completed: activeRun.completedCount,
+                failed: activeRun.failedCount,
+              } : undefined}
               isSynthesisRunning={isSynthesisRunning}
               hasZeroResults={hasZeroResults}
             />
@@ -370,14 +384,16 @@ export function ChatView({
               onResize={(size) => setIsPanelOpen(size.asPercentage > 1)}
             >
               <ExtractionsPanel
-                articles={articles}
-                activeQueryId={activeQueryId}
+                articles={displayArticles}
+                activeQueryId={collectionScope === 'all' ? null : activeQueryId}
+                title={collectionScope === 'all' ? 'Acervo consolidado' : undefined}
+                searchCount={collectionScope === 'all' ? queryGroups.length : undefined}
                 highlightedRow={highlightedRow}
                 hasZeroResults={hasZeroResults}
                 isSearchRunning={isSearchRunning}
                 realtimeStatus={realtimeStatus}
                 onCollapse={() => extractionsPanelRef.current?.collapse()}
-                onCancelSearch={handleCancelSearch}
+                onCancelSearch={collectionScope === 'all' ? undefined : handleCancelSearch}
               />
             </ResizablePanel>
           </>
@@ -398,14 +414,16 @@ export function ChatView({
               <SheetDescription>Resultados e PDFs extraídos da busca atual.</SheetDescription>
             </div>
             <ExtractionsPanel
-              articles={articles}
-              activeQueryId={activeQueryId}
+              articles={displayArticles}
+              activeQueryId={collectionScope === 'all' ? null : activeQueryId}
+              title={collectionScope === 'all' ? 'Acervo consolidado' : undefined}
+              searchCount={collectionScope === 'all' ? queryGroups.length : undefined}
               highlightedRow={highlightedRow}
               hasZeroResults={hasZeroResults}
               isSearchRunning={isSearchRunning}
               realtimeStatus={realtimeStatus}
               onCollapse={() => setIsPanelOpen(false)}
-              onCancelSearch={handleCancelSearch}
+              onCancelSearch={collectionScope === 'all' ? undefined : handleCancelSearch}
             />
           </SheetContent>
         </Sheet>

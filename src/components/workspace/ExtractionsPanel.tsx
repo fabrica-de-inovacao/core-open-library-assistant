@@ -43,6 +43,8 @@ export const ExtractionsPanel = React.memo(
     onCollapse,
     onDeleteArticle,
     onCancelSearch,
+    title,
+    searchCount,
   }: ExtractionsPanelProps) => {
     const [currentPage, setCurrentPage] = useState(1);
     const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -104,13 +106,16 @@ export const ExtractionsPanel = React.memo(
             <div className="flex min-w-0 items-center gap-2">
               <Database className="text-primary size-4 shrink-0" />
               <h2 className="text-foreground text-sm font-semibold tracking-tight">
-                Acervo de Extração
+                {title ?? 'Acervo de Extração'}
               </h2>
               {articles.length > 0 && (
                 <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 font-mono text-xs font-bold">
                   {articles.length}
                 </span>
               )}
+              {searchCount ? (
+                <span className="text-muted-foreground text-xs">{searchCount} buscas</span>
+              ) : null}
               {realtimeStatus === 'disconnected' && (
                 <span
                   className="flex items-center gap-0.5 text-xs text-amber-500"
@@ -237,7 +242,7 @@ export const ExtractionsPanel = React.memo(
 
         {/* Content */}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {activeQueryId ? (
+          {activeQueryId || articles.length > 0 ? (
             <>
               {articles.length > 0 && (
                 <div className="border-border/60 bg-muted/10 flex items-center gap-2 border-b px-4 py-2">

@@ -9,6 +9,7 @@ import { auth } from '@/auth';
 import { enqueueArticleBatch } from '@/server/queue/client';
 import { rateLimit, getClientIp } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
+import { publishQueryStatus } from '@/server/queue/notifier';
 
 // F-04: 10 buscas por minuto por usuário/IP
 const searchLimiter = rateLimit({ limit: 10, windowMs: 60_000 });
@@ -209,7 +210,7 @@ export async function GET(request: Request) {
     if (queryId) {
       await db
         .update(searchQueries)
-        .set({ status: 'searching' })
+        .set({ status: 'searching', expectedCount: 0 })
         .where(eq(searchQueries.id, queryId));
       logger.debug(`[Search] 📝 QueryID recebido → searching: ${queryId}`);
     } else {
@@ -300,6 +301,10 @@ export async function GET(request: Request) {
     const tldrLang = searchParams.get('tldr_lang') ?? 'pt-BR';
 
     const limitedResults = allResults.slice(0, articleLimit);
+    await db
+      .update(searchQueries)
+      .set({ expectedCount: limitedResults.length })
+      .where(eq(searchQueries.id, queryId as string));
     logger.debug(
       `[Search] 📊 Limite: ${articleLimit} | TL;DR lang: ${tldrLang} | Total: ${limitedResults.length}`
     );
@@ -454,6 +459,7 @@ export async function GET(request: Request) {
         .update(searchQueries)
         .set({ status: 'needs_refinement' })
         .where(eq(searchQueries.id, queryId));
+      await publishQueryStatus({ query_id: queryId as string, status: 'needs_refinement' });
       logger.warn(
         `[Search] ⚠️ Poucos resultados (${limitedResults.length} < ${MIN_USEFUL_ARTICLES}) — needs_refinement`
       );

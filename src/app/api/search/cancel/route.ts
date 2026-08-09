@@ -6,6 +6,7 @@ import { auth } from '@/auth';
 import { bullmqRedis } from '@/lib/redis';
 import { orchestratorQueue } from '@/server/queue/client';
 import { logger } from '@/lib/logger';
+import { publishQueryStatus } from '@/server/queue/notifier';
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
 
   // 1. Marca a query como cancelada no DB
   await db.update(searchQueries).set({ status: 'cancelled' }).where(eq(searchQueries.id, query_id));
+  await publishQueryStatus({ query_id, status: 'cancelled' });
 
   // 2. Marca artigos ainda pendentes/em extração como failed (limpeza)
   const pendingStatuses = ['pending', 'extracting', 'llm_processing'];

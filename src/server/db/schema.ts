@@ -124,6 +124,13 @@ export const searchQueries = pgTable(
     expandedQuery: text('expanded_query'),
     summary: text('summary'), // Saved general TL;DR
     status: varchar('status', { length: 50 }).notNull(), // 'proposed', 'searching', 'processing', 'done', 'failed'
+    searchGroupId: uuid('search_group_id').defaultRandom().notNull(),
+    attempt: integer('attempt').default(1).notNull(),
+    source: varchar('source', { length: 20 }).default('sol').notNull(),
+    expectedCount: integer('expected_count').default(0).notNull(),
+    completedCount: integer('completed_count').default(0).notNull(),
+    failedCount: integer('failed_count').default(0).notNull(),
+    revision: integer('revision').default(0).notNull(),
     // Fase 6 (P-seguinte): embedding semântico da query (gemini-embedding-001, 768 dims).
     // Permite detectar queries similares anteriores e alimentar RAG de cache entre sessões.
     queryEmbedding: vector('query_embedding', { dimensions: 768 }),
@@ -135,6 +142,10 @@ export const searchQueries = pgTable(
     statusOriginalQueryIdx: index('search_queries_status_oq_idx').on(
       table.status,
       table.originalQuery
+    ),
+    searchGroupAttemptIdx: uniqueIndex('search_queries_group_attempt_idx').on(
+      table.searchGroupId,
+      table.attempt
     ),
   })
 );

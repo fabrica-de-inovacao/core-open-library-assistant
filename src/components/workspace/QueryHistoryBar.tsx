@@ -8,7 +8,7 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Loader2, CheckCircle2, History, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, CheckCircle2, History, ChevronLeft, ChevronRight, Library } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
@@ -18,18 +18,23 @@ export interface QueryGroup {
   totalCount: number;
   doneCount: number;
   isRunning: boolean;
+  attemptCount?: number;
+  status?: string;
 }
 
 interface QueryHistoryBarProps {
   groups: QueryGroup[];
   activeQueryId: string | null;
+  allCount: number;
+  isAllActive: boolean;
+  onSelectAll: () => void;
   /** Callback ao clicar num chip — passa o queryId selecionado */
   onSelectQuery: (queryId: string) => void;
 }
 
 const SCROLL_STEP = 200;
 
-export function QueryHistoryBar({ groups, activeQueryId, onSelectQuery }: QueryHistoryBarProps) {
+export function QueryHistoryBar({ groups, activeQueryId, allCount, isAllActive, onSelectAll, onSelectQuery }: QueryHistoryBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -98,6 +103,23 @@ export function QueryHistoryBar({ groups, activeQueryId, onSelectQuery }: QueryH
           <span className="text-[10px] font-medium tracking-wider uppercase">Queries</span>
         </div>
 
+        <button
+          type="button"
+          onClick={onSelectAll}
+          className={cn(
+            'flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors',
+            isAllActive
+              ? 'border-primary/40 bg-primary/10 text-primary'
+              : 'border-border/50 bg-background text-muted-foreground hover:bg-muted'
+          )}
+        >
+          <Library className="size-3" />
+          <span>Todos</span>
+          <Badge variant="secondary" className="h-4 px-1 py-0 text-[9px] leading-none">
+            {allCount}
+          </Badge>
+        </button>
+
         {groups.map((g, idx) => {
           const isActive = g.queryId === activeQueryId;
           const isAllDone = g.totalCount > 0 && g.doneCount >= g.totalCount;
@@ -127,6 +149,12 @@ export function QueryHistoryBar({ groups, activeQueryId, onSelectQuery }: QueryH
 
               {/* Tópico */}
               <span className="max-w-[180px] truncate">{shortTopic}</span>
+
+              {(g.attemptCount ?? 1) > 1 && (
+                <Badge variant="outline" className="h-4 px-1 py-0 text-[9px] leading-none">
+                  {g.attemptCount} tent.
+                </Badge>
+              )}
 
               {/* Status */}
               {g.isRunning ? (

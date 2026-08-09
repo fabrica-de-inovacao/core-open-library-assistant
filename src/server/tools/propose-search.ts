@@ -52,6 +52,25 @@ export interface ToolContext {
   synthesisDepth?: SynthesisDepth;
 }
 
+async function getAttemptMetadata(chatId: string | null, source: 'sol' | 'openalex') {
+  if (!chatId) return { attempt: 1, source };
+
+  const [latest] = await db
+    .select({
+      searchGroupId: searchQueries.searchGroupId,
+      attempt: searchQueries.attempt,
+      status: searchQueries.status,
+    })
+    .from(searchQueries)
+    .where(eq(searchQueries.chatId, chatId))
+    .orderBy(desc(searchQueries.createdAt))
+    .limit(1);
+
+  return latest?.status === 'needs_refinement'
+    ? { searchGroupId: latest.searchGroupId, attempt: latest.attempt + 1, source }
+    : { attempt: 1, source };
+}
+
 export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
   return tool({
     description:
@@ -242,6 +261,7 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
             status: 'proposed',
             userId: ctx.sessionUserId,
             chatId: ctx.chatId,
+            ...(await getAttemptMetadata(ctx.chatId, 'sol')),
             ...(queryEmbeddingVec ? { queryEmbedding: queryEmbeddingVec } : {}),
           })
           .returning();
@@ -343,6 +363,7 @@ export function buildProposeSearchGlobalDatabaseTool(ctx: ToolContext) {
           status: 'proposed',
           userId: ctx.sessionUserId,
           chatId: ctx.chatId,
+          ...(await getAttemptMetadata(ctx.chatId, 'openalex')),
         })
         .returning();
 

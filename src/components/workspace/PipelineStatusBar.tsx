@@ -34,6 +34,7 @@ interface PipelineStatusBarProps {
   articles: Array<{ queryId?: string | null; status?: string | null }>;
   activeQueryId: string | null;
   queryStatus: string | null;
+  progress?: { expected: number; completed: number; failed: number };
   isSynthesisRunning?: boolean;
   hasZeroResults?: boolean;
   className?: string;
@@ -102,6 +103,7 @@ export function PipelineStatusBar({
   articles,
   activeQueryId,
   queryStatus,
+  progress,
   isSynthesisRunning = false,
   hasZeroResults = false,
   className,
@@ -112,10 +114,10 @@ export function PipelineStatusBar({
       ? articles
       : articles.filter((a) => a.queryId === activeQueryId);
 
-  const total = scopedArticles.length;
-  const terminalCount = scopedArticles.filter((a) =>
-    TERMINAL.includes(a.status as (typeof TERMINAL)[number])
-  ).length;
+  const total = progress?.expected || scopedArticles.length;
+  const terminalCount = progress
+    ? progress.completed + progress.failed
+    : scopedArticles.filter((a) => TERMINAL.includes(a.status as (typeof TERMINAL)[number])).length;
   const pendingCount = scopedArticles.filter((a) => a.status === 'pending').length;
   const extractingCount = scopedArticles.filter((a) => a.status === 'extracting').length;
   const synthCount = scopedArticles.filter((a) => a.status === 'llm_processing').length;

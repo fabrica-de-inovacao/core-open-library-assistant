@@ -7,6 +7,7 @@ import { logger } from '@/lib/logger';
 import { db } from '@/server/db';
 import { articles, searchQueries } from '@/server/db/schema';
 import type { ArticleOrchestrationJob } from './jobs';
+import { publishQueryStatus } from './notifier';
 
 async function runRelevanceGate(queryId: string, skipRelevanceGate?: boolean) {
   if (skipRelevanceGate) return { proceed: true, reason: 'openalex_skip' };
@@ -58,6 +59,7 @@ async function runRelevanceGate(queryId: string, skipRelevanceGate?: boolean) {
       .update(articles)
       .set({ status: 'failed' })
       .where(and(eq(articles.queryId, queryId), eq(articles.status, 'pending')));
+    await publishQueryStatus({ query_id: queryId, status: 'needs_refinement' });
     return { proceed: false, reason: 'not_relevant' };
   }
 
@@ -128,6 +130,7 @@ export function startOrchestratorWorker() {
       .update(searchQueries)
       .set({ status: 'needs_refinement' })
       .where(eq(searchQueries.id, job.data.query_id));
+    await publishQueryStatus({ query_id: job.data.query_id, status: 'needs_refinement' });
   });
 
   return worker;

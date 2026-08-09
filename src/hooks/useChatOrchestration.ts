@@ -96,6 +96,7 @@ export function useChatOrchestration({
   // ── Session State ───────────────────────────────────────────────────────────
 
   const [sessionQueryId, setSessionQueryId] = useState<string | null>(urlQueryId ?? null);
+  const [collectionScope, setCollectionScope] = useState<'active' | 'all' | string>('active');
   const sessionQueryIdRef = useRef<string | null>(urlQueryId ?? null);
   useEffect(() => {
     sessionQueryIdRef.current = sessionQueryId;
@@ -198,6 +199,7 @@ export function useChatOrchestration({
     async (queries: string[], qId: string, isGlobal = false) => {
       // P-01: URL permanece em /workspace/chat/[chatId] — queryId não vai para a URL
       setSessionQueryId(qId);
+      setCollectionScope('active');
       sessionQueryIdRef.current = qId; // Fase C: sincroniza ref imediatamente — elimina setTimeout(300)
       setLocalExecutedIds((prev) => new Set(prev).add(qId));
       setRunningSearches((prev) => new Set(prev).add(qId));
@@ -591,6 +593,8 @@ export function useChatOrchestration({
 
   const {
     data: articles,
+    runs: searchRuns,
+    activeRun,
     realtimeStatus,
     addQueryId: addWatchedQueryId,
     refreshByChatId: refreshArticles,
@@ -731,6 +735,30 @@ export function useChatOrchestration({
     return null;
   }, [messages, activeQueryId]);
 
+  const consolidatedArticles = useMemo(() => {
+    const latestByGroup = new Map<string, (typeof searchRuns)[number]>();
+    for (const run of searchRuns) {
+      const current = latestByGroup.get(run.searchGroupId);
+      if (!current || run.attempt > current.attempt) latestByGroup.set(run.searchGroupId, run);
+    }
+    const latestRunIds = new Set(
+      Array.from(latestByGroup.values())
+        .filter((run) => !['needs_refinement', 'cancelled', 'failed'].includes(run.status))
+        .map((run) => run.id)
+    );
+    const seen = new Set<string>();
+    return (articles ?? [])
+      .filter((article) => latestRunIds.has(article.queryId) && article.status !== 'failed')
+      .filter((article) => {
+        const key = article.doi?.toLowerCase().trim()
+          ?? article.originalUrl?.toLowerCase().trim()
+          ?? article.title.toLowerCase().replace(/\W+/g, ' ').trim();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [articles, searchRuns]);
+
   const displayArticles = useMemo(() => {
     // Queries que foram rejeitadas não devem exibir artigos no painel.
     // Isso evita mostrar artigos de uma busca que o RelevanceGate reprovou,
@@ -744,9 +772,15 @@ export function useChatOrchestration({
         : false);
 
     const rawArr = (() => {
+      if (collectionScope === 'all') {
+        return consolidatedArticles;
+      }
+
       if (isQueryHidden) return [];
-      
-      const targetQueryId = activeQueryId ?? previousQueryIdRef.current;
+
+      const targetQueryId = collectionScope === 'active'
+        ? activeQueryId ?? previousQueryIdRef.current
+        : collectionScope;
       if (!targetQueryId) return [];
       
       const filtered = articles?.filter(a => (a as any).queryId === targetQueryId) ?? [];
@@ -759,7 +793,7 @@ export function useChatOrchestration({
     if (!rawArr.length) return rawArr;
 
     // Após síntese: usa a ordem exata do reranker semântico (backend) — P-ranking-sync
-    if (reviewRankedIds?.length) {
+    if (collectionScope !== 'all' && reviewRankedIds?.length) {
       const posMap = new Map(reviewRankedIds.map((id, i) => [id, i]));
       return [...rawArr].sort(
         (a, b) => (posMap.get(a.id) ?? Infinity) - (posMap.get(b.id) ?? Infinity)
@@ -772,7 +806,7 @@ export function useChatOrchestration({
     const terminal = rawArr.filter((a) => TERMINAL.includes(a.status ?? ''));
     const processing = rawArr.filter((a) => !TERMINAL.includes(a.status ?? ''));
     return [...rankArticles(terminal as Article[]), ...processing];
-  }, [articles, isSearchRunning, reviewRankedIds, queryStatus, activeQueryId]);
+  }, [articles, consolidatedArticles, isSearchRunning, reviewRankedIds, queryStatus, activeQueryId, collectionScope]);
 
   const panelQueryId =
     articles && articles.length > 0 ? activeQueryId : (previousQueryIdRef.current ?? activeQueryId);
@@ -808,7 +842,29 @@ export function useChatOrchestration({
       }
     }
 
-    // Agrupa articles por queryId
+    if (searchRuns.length > 0) {
+      const latestByGroup = new Map<string, (typeof searchRuns)[number]>();
+      for (const run of searchRuns) {
+        const current = latestByGroup.get(run.searchGroupId);
+        if (!current || run.attempt > current.attempt) latestByGroup.set(run.searchGroupId, run);
+      }
+
+      return Array.from(latestByGroup.values()).map((run) => {
+        const runArticles = (articles ?? []).filter((article) => article.queryId === run.id);
+        return {
+          queryId: run.id,
+          topic: topicMap.get(run.id) ?? run.originalQuery ?? 'Pesquisa',
+          totalCount: run.expectedCount || runArticles.length,
+          doneCount: run.completedCount,
+          isRunning: ['proposed', 'searching', 'processing'].includes(run.status),
+          attemptCount: searchRuns.filter((candidate) => candidate.searchGroupId === run.searchGroupId)
+            .length,
+          status: run.status,
+        };
+      });
+    }
+
+    // Fallback para chats anteriores a migration de agrupamento.
     const groupMap = new Map<
       string,
       {
@@ -839,7 +895,7 @@ export function useChatOrchestration({
     }
 
     return Array.from(groupMap.values());
-  }, [messages, articles, runningSearches]);
+  }, [messages, articles, runningSearches, searchRuns]);
 
   // ── Review Orchestration ────────────────────────────────────────────────────
 
@@ -1080,6 +1136,8 @@ export function useChatOrchestration({
     sessionQueryId,
     setSessionQueryId,
     activeQueryId,
+    collectionScope,
+    setCollectionScope,
     handleExecuteSearch,
     handleCancelSearch,
     executedProposalIds,
@@ -1087,9 +1145,11 @@ export function useChatOrchestration({
     // Articles
     articles,
     displayArticles,
+    consolidatedArticleCount: consolidatedArticles.length,
     panelQueryId,
     hasArticles,
     queryGroups,
+    searchRuns,
     realtimeStatus,
     articleCountRef,
     // Fase 3 (P-PDF/P-DOI): subscrever realtime de uploads e refresh manual
@@ -1104,6 +1164,7 @@ export function useChatOrchestration({
     // Status da query ativa no DB (done/needs_refinement/processing/etc.) — usado
     // pelo PipelineStatusBar para feedback global step-by-step ao usuário.
     queryStatus,
+    activeRun,
     // true quando generate_systematic_review está em execução (para manter PipelineStatusBar)
     isSynthesisRunning,
   };

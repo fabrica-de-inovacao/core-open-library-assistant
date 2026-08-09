@@ -51,4 +51,6 @@ export interface ExtractionsPanelProps {
   onDeleteArticle?: (id: string) => Promise<void>;
   /** Cancela a extração em andamento */
   onCancelSearch?: (qId: string) => Promise<void>;
+  title?: string;
+  searchCount?: number;
 }

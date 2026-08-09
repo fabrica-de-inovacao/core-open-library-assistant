@@ -1,29 +1,47 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { type articles } from '@/server/db/schema';
-import { logger } from '@/lib/logger';
 
 type Article = typeof articles.$inferSelect;
 export type RealtimeStatus = 'connecting' | 'connected' | 'disconnected';
+export type SearchRunSummary = {
+  id: string;
+  searchGroupId: string;
+  attempt: number;
+  source: string;
+  status: string;
+  originalQuery: string;
+  expectedCount: number;
+  completedCount: number;
+  failedCount: number;
+  revision: number;
+  createdAt: string | Date;
+};
 
-type StreamMessage =
-  | { type: 'article.updated'; article_id: string; status: string; tldr_content?: string | null }
-  | { type: 'query.status'; query_id: string; status: string };
+type RunSnapshot = {
+  run: { id: string; status: string; revision: number };
+  attempts: SearchRunSummary[];
+  articles: Article[];
+};
 
 export function useArticleStream(activeQueryId: string | null, chatId?: string | null) {
   const [data, setData] = useState<Article[]>([]);
+  const [runs, setRuns] = useState<SearchRunSummary[]>([]);
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>('connecting');
   const [extraQueryIds, setExtraQueryIds] = useState<Set<string>>(new Set());
   const [queryStatusEntry, setQueryStatusEntry] = useState<{ id: string; status: string } | null>(
     null
   );
+  const revisionRef = useRef<{ id: string; revision: number } | null>(null);
 
   const fetchByChatId = useCallback(async (cid: string) => {
-    const res = await fetch(`/api/articles?chatId=${encodeURIComponent(cid)}`);
-    if (!res.ok) return;
-    const rows = (await res.json()) as Article[];
-    setData(rows);
+    const [articlesRes, runsRes] = await Promise.all([
+      fetch(`/api/articles?chatId=${encodeURIComponent(cid)}`),
+      fetch(`/api/search-runs?chatId=${encodeURIComponent(cid)}`),
+    ]);
+    if (articlesRes.ok) setData((await articlesRes.json()) as Article[]);
+    if (runsRes.ok) setRuns((await runsRes.json()) as SearchRunSummary[]);
   }, []);
 
   const refreshByChatId = useCallback(async () => {
@@ -32,14 +50,16 @@ export function useArticleStream(activeQueryId: string | null, chatId?: string |
   }, [chatId, fetchByChatId]);
 
   const fetchInitial = useCallback(async (id: string) => {
-    const res = await fetch(`/api/articles?queryId=${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/search-runs/${encodeURIComponent(id)}`);
     if (!res.ok) return;
-    const rows = (await res.json()) as Article[];
-    setData((prev) => {
-      const existingIds = new Set(prev.map((a) => a.id));
-      const newArticles = rows.filter((a) => !existingIds.has(a.id));
-      return [...prev, ...newArticles];
+    const snapshot = (await res.json()) as RunSnapshot;
+    setData((prev) => [...prev.filter((a) => a.queryId !== id), ...snapshot.articles]);
+    setRuns((prev) => {
+      const ids = new Set(snapshot.attempts.map((run) => run.id));
+      return [...prev.filter((run) => !ids.has(run.id)), ...snapshot.attempts];
     });
+    setQueryStatusEntry({ id, status: snapshot.run.status });
+    revisionRef.current = { id, revision: snapshot.run.revision };
   }, []);
 
   const fetchStatus = useCallback(async (id: string) => {
@@ -56,32 +76,18 @@ export function useArticleStream(activeQueryId: string | null, chatId?: string |
 
   useEffect(() => {
     if (!activeQueryId) return;
-    setRealtimeStatus('connecting');
     void fetchInitial(activeQueryId);
     void fetchStatus(activeQueryId);
 
     const source = new EventSource(`/api/stream/${activeQueryId}`);
     source.onopen = () => setRealtimeStatus('connected');
     source.onerror = () => setRealtimeStatus('disconnected');
-    source.onmessage = (event) => {
-      const msg = JSON.parse(event.data) as StreamMessage;
-      if (msg.type === 'article.updated') {
-        setData((prev) => {
-          if (!prev.some((a) => a.id === msg.article_id)) {
-            void fetchInitial(activeQueryId);
-            return prev;
-          }
-          return prev.map((a) =>
-            a.id === msg.article_id
-              ? { ...a, status: msg.status, tldrContent: msg.tldr_content ?? a.tldrContent }
-              : a
-          );
-        });
+    source.addEventListener('run.updated', (event) => {
+      const update = JSON.parse(event.data) as { revision: number };
+      if (revisionRef.current?.id !== activeQueryId || update.revision > revisionRef.current.revision) {
+        void fetchInitial(activeQueryId);
       }
-      if (msg.type === 'query.status') {
-        setQueryStatusEntry({ id: activeQueryId, status: msg.status });
-      }
-    };
+    });
 
     return () => source.close();
   }, [activeQueryId, fetchInitial, fetchStatus]);
@@ -115,5 +121,15 @@ export function useArticleStream(activeQueryId: string | null, chatId?: string |
     return () => clearInterval(intervalId);
   }, [activeQueryId, effectiveQueryStatus, fetchInitial, fetchStatus]);
 
-  return { data, realtimeStatus, addQueryId, refreshByChatId, queryStatus: effectiveQueryStatus };
+  const activeRun = runs.find((run) => run.id === activeQueryId) ?? null;
+
+  return {
+    data,
+    runs,
+    activeRun,
+    realtimeStatus,
+    addQueryId,
+    refreshByChatId,
+    queryStatus: effectiveQueryStatus,
+  };
 }
