@@ -23,6 +23,15 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
 
 
+def safe_slice(s: str | None, max_len: int) -> str:
+    if not s:
+        return ""
+    sliced = s[:max_len]
+    if sliced and 0xD800 <= ord(sliced[-1]) <= 0xDBFF:
+        sliced = sliced[:-1]
+    return sliced
+
+
 def _clean_jats(text: str | None) -> str | None:
     if not text:
         return None
@@ -201,8 +210,8 @@ async def resolve_user_llm_config(db, user_id: str | None) -> tuple[str, str, st
     fallback_provider = (os.environ.get("LLM_PROVIDER") or "google").lower()
     default_models = {
         "google": "gemini-2.5-flash-lite",
-        "openai": "gpt-4o-mini",
-        "groq": "llama-3.1-8b-instant",
+        "openai": "gpt-5.6-luna",
+        "groq": "openai/gpt-oss-20b",
     }
     fallback_model = os.environ.get("LLM_MODEL_TLDR") or os.environ.get("LLM_MODEL") or default_models.get(fallback_provider, "gemini-2.5-flash-lite")
     fallback_env_keys = {
@@ -216,7 +225,7 @@ async def resolve_user_llm_config(db, user_id: str | None) -> tuple[str, str, st
         return fallback_provider, fallback_key, fallback_model
 
     row = await db.fetchrow(
-        "SELECT provider, encrypted_api_key, use_own_key, models FROM user_llm_settings WHERE user_id = $1",
+        "SELECT provider, use_own_key, models FROM user_llm_settings WHERE user_id = $1",
         user_id,
     )
     if not row:
@@ -224,16 +233,21 @@ async def resolve_user_llm_config(db, user_id: str | None) -> tuple[str, str, st
 
     provider = (row["provider"] or fallback_provider).lower()
     use_own_key = bool(row["use_own_key"])
-    encrypted_key = row["encrypted_api_key"]
     raw_models = row["models"]
     models = json.loads(raw_models) if isinstance(raw_models, str) else (raw_models or {})
 
     model = models.get("tldr") or default_models.get(provider, fallback_model)
 
     api_key = None
-    if use_own_key and encrypted_key:
+    if use_own_key:
+        credential = await db.fetchrow(
+            "SELECT encrypted_api_key FROM user_provider_credentials WHERE user_id = $1 AND provider = $2",
+            user_id,
+            provider,
+        )
+        encrypted_key = credential["encrypted_api_key"] if credential else None
         secret = os.environ.get("USER_SECRET_ENCRYPTION_KEY") or os.environ.get("AUTH_SECRET")
-        if secret:
+        if secret and encrypted_key:
             try:
                 api_key = decrypt_secret(encrypted_key, secret)
             except Exception as e:
@@ -274,7 +288,14 @@ async def _llm_generate_tldr(
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                return (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text")
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    return None
+                parts = (candidates[0].get("content") or {}).get("parts") or []
+                texts = [p.get("text") for p in parts if isinstance(p, dict) and p.get("text") and not p.get("thought")]
+                if not texts:
+                    texts = [p.get("text") for p in parts if isinstance(p, dict) and p.get("text")]
+                return "\n".join(texts) if texts else None
 
             elif provider in {"openai", "groq"}:
                 endpoint = (
@@ -292,9 +313,12 @@ async def _llm_generate_tldr(
                         {"role": "system", "content": system},
                         {"role": "user", "content": prompt},
                     ],
-                    "max_tokens": 1000,
-                    "temperature": 0.2,
                 }
+                if provider == "openai" and (model.startswith("gpt-5") or model.startswith("o")):
+                    payload["max_completion_tokens"] = 1000
+                else:
+                    payload["max_tokens"] = 1000
+
                 resp = await http.post(endpoint, headers=headers, json=payload, timeout=timeout)
                 resp.raise_for_status()
                 data = resp.json()
@@ -309,15 +333,15 @@ async def _llm_generate_tldr(
             err_detail = e.response.text if hasattr(e, 'response') and e.response else str(e)
             if e.response.status_code == 429 and attempt < 4:
                 wait_time = 2 ** attempt
-                print(f"[queue_worker] Rate limit (429) no {provider} ({model}). Tentativa {attempt}/4. Aguardando {wait_time}s...")
+                print(f"[queue_worker] Rate limit (429) no {provider} ({model}). Tentativa {attempt}/4. Aguardando {wait_time}s...", flush=True)
                 await asyncio.sleep(wait_time)
                 continue
-            print(f"[queue_worker] HTTP {e.response.status_code} no {provider} ({model}): {err_detail[:300]}")
+            print(f"[queue_worker] HTTP {e.response.status_code} no {provider} ({model}): {err_detail[:300]}", flush=True)
             raise
         except Exception as e:
             if attempt < 4:
                 wait_time = 2 ** attempt
-                print(f"[queue_worker] Erro ao chamar {provider} ({model}): {repr(e)}. Tentativa {attempt}/4. Aguardando {wait_time}s...")
+                print(f"[queue_worker] Erro ao chamar {provider} ({model}): {repr(e)}. Tentativa {attempt}/4. Aguardando {wait_time}s...", flush=True)
                 await asyncio.sleep(wait_time)
                 continue
             raise
@@ -328,28 +352,30 @@ async def _embed_text(http: httpx.AsyncClient, text: str, user_api_key: str | No
     if not text:
         return None
 
-    emb_provider = (provider or os.environ.get("EMBEDDING_PROVIDER") or os.environ.get("LLM_PROVIDER") or "google").lower()
+    generation_provider = (provider or os.environ.get("LLM_PROVIDER") or "google").lower()
+    emb_provider = generation_provider
     if emb_provider == "groq":
-        emb_provider = "google"
+        emb_provider = "openai"
 
     for attempt in range(1, 4):
         try:
             if emb_provider == "openai":
-                api_key = user_api_key or os.environ.get("OPENAI_API_KEY")
+                api_key = user_api_key if generation_provider == "openai" else None
+                api_key = api_key or os.environ.get("OPENAI_API_KEY")
                 if not api_key:
                     return None
                 model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
                 resp = await http.post(
                     "https://api.openai.com/v1/embeddings",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"input": text[:2000], "model": model, "dimensions": 768},
+                    json={"input": safe_slice(text, 2000), "model": model, "dimensions": 768},
                     timeout=30,
                 )
                 resp.raise_for_status()
                 data = resp.json()
                 return (data.get("data") or [{}])[0].get("embedding")
             else:
-                api_key = os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
+                api_key = user_api_key or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
                 if not api_key:
                     return None
                 model = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
@@ -358,7 +384,7 @@ async def _embed_text(http: httpx.AsyncClient, text: str, user_api_key: str | No
                     url,
                     json={
                         "model": f"models/{model}",
-                        "content": {"parts": [{"text": text[:2000]}]},
+                        "content": {"parts": [{"text": safe_slice(text, 2000)}]},
                         "outputDimensionality": 768,
                     },
                     timeout=30,
@@ -379,6 +405,7 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
     redis = ctx["redis"]
     db = ctx["db"]
     http = ctx["http"]
+    print(f"[queue_worker] Processando artigo {article_id} | query={query_id} | user={user_id}", flush=True)
 
     try:
         if await _is_cancelled(redis, query_id):
@@ -389,7 +416,7 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
         article = await db.fetchrow("SELECT * FROM articles WHERE id=$1", article_id)
         if not article:
             return {"error": "article not found"}
-        if article["status"] in {"done", "abstract_only", "failed"}:
+        if article["status"] in {"done", "abstract_only"}:
             await check_and_mark_query_done(ctx, query_id)
             return {"skipped": True, "status": article["status"]}
 
@@ -471,21 +498,20 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
         if not is_user_upload:
             await db.execute("UPDATE articles SET status='extracting' WHERE id=$1", article_id)
             await publish_article_update(redis, query_id, article_id=article_id, status="extracting")
-            extraction = await _extract_pdf(http, article["original_url"])
-            if not extraction.get("success"):
-                await db.execute("UPDATE articles SET status='failed' WHERE id=$1", article_id)
-                await publish_article_update(redis, query_id, article_id=article_id, status="failed")
-                await check_and_mark_query_done(ctx, query_id)
-                return {"failed": True, "reason": "extract_failed"}
-            markdown = (extraction.get("content_markdown") or "").replace("\x00", "")
-            worker_status = "abstract_only" if extraction.get("method_used") == "abstract_scraping" else "llm_processing"
-            await db.execute(
-                "UPDATE articles SET markdown_content=$2, status=$3 WHERE id=$1",
-                article_id,
-                markdown,
-                worker_status,
-            )
-            await publish_article_update(redis, query_id, article_id=article_id, status=worker_status)
+            try:
+                extraction = await _extract_pdf(http, article["original_url"])
+                if extraction.get("success"):
+                    markdown = (extraction.get("content_markdown") or "").replace("\x00", "")
+                    worker_status = "abstract_only" if extraction.get("method_used") == "abstract_scraping" else "llm_processing"
+                    await db.execute(
+                        "UPDATE articles SET markdown_content=$2, status=$3 WHERE id=$1",
+                        article_id,
+                        markdown,
+                        worker_status,
+                    )
+                    await publish_article_update(redis, query_id, article_id=article_id, status=worker_status)
+            except Exception as err:
+                print(f"[queue_worker] Extracao falhou para {article_id}: {err}. Mantendo abstract_only.", flush=True)
 
         provider, api_key, model = await resolve_user_llm_config(db, user_id)
 
@@ -501,7 +527,7 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
                 provider,
                 api_key,
                 model,
-                f"{context}\n\nGere a síntese:\n\n{markdown[:30000]}",
+                f"{context}\n\nGere a síntese:\n\n{safe_slice(markdown, 30000)}",
                 f"Você é um assistente acadêmico. Crie uma síntese estruturada neste formato: 🔍 Problema: ...\n🛠 Método: ...\n✅ Resultado: ... Máximo 600 caracteres. Obrigatoriamente em {lang}.",
             )
 
@@ -509,13 +535,15 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
         embedding = await _embed_text(http, embed_source or "", user_api_key=api_key, provider=provider)
         if embedding:
             await db.execute(
-                "UPDATE articles SET abstract_embedding=$2::vector WHERE id=$1",
+                "UPDATE articles SET abstract_embedding=$2::vector, embedding_provider=$3, embedding_model=$4 WHERE id=$1",
                 article_id,
                 json.dumps(embedding),
+                "openai" if provider == "groq" else provider,
+                "text-embedding-3-small" if provider in ("groq", "openai") else "gemini-embedding-001",
             )
 
-        status = "done" if tldr else "failed"
-        final_tldr = tldr or "Falha ao gerar síntese via IA."
+        status = "done" if tldr else "abstract_only"
+        final_tldr = tldr or "Síntese indisponível para este artigo."
         await db.execute(
             "UPDATE articles SET tldr_content=$2, status=$3 WHERE id=$1",
             article_id,
@@ -532,11 +560,12 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
         await check_and_mark_query_done(ctx, query_id)
         return {"status": status, "article_id": article_id}
     except Exception as exc:
-        await db.execute("UPDATE articles SET status='failed' WHERE id=$1", article_id)
-        await publish_article_update(redis, query_id, article_id=article_id, status="failed")
+        fallback_tldr = "Síntese indisponível para este artigo."
+        await db.execute("UPDATE articles SET status='abstract_only', tldr_content=$2 WHERE id=$1", article_id, fallback_tldr)
+        await publish_article_update(redis, query_id, article_id=article_id, status="abstract_only", tldr_content=fallback_tldr)
         await check_and_mark_query_done(ctx, query_id)
-        print(f"[queue_worker] Artigo {article_id} marcado como failed: {exc!r}")
-        return {"failed": True, "article_id": article_id, "error": repr(exc)}
+        print(f"[queue_worker] Artigo {article_id} falhou no pipeline: {exc!r}. Marcado como abstract_only.", flush=True)
+        return {"status": "abstract_only", "article_id": article_id, "error": repr(exc)}
 
 
 async def startup(ctx):

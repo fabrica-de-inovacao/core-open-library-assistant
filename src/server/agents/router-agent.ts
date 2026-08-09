@@ -16,6 +16,7 @@
 
 import { generateText } from 'ai';
 import { getModelForTask, getModelIdForTask } from '@/lib/ai-provider';
+import { getUserModel } from '@/server/llm/client';
 import { logger } from '@/lib/logger';
 
 // ─── Tipos públicos ─────────────────────────────────────────────────────────
@@ -227,10 +228,10 @@ function lexicalRoute(input: string): RouteResult | null {
 
 // ─── Camada 2: LLM leve ─────────────────────────────────────────────────────
 
-async function llmRoute(input: string): Promise<RouteResult> {
+async function llmRoute(input: string, userId?: string | null): Promise<RouteResult> {
   try {
     const { text } = await generateText({
-      model: getModelForTask('reranker'), // modelo leve (gemini-1.5-flash)
+      model: userId ? await getUserModel(userId, 'reranker') : getModelForTask('reranker'),
       system: `Você é um classificador de intenção para uma plataforma de pesquisa acadêmica.
 Sua tarefa: dado o input do usuário, classificar a intenção em UMA das três categorias abaixo.
 
@@ -299,7 +300,8 @@ Exemplo: {"intent":"systematic_review","reasoning":"Usuário quer mapear a liter
  */
 export async function runRouterAgent(
   input: string,
-  userOverride?: 'quick' | 'systematic' | null
+  userOverride?: 'quick' | 'systematic' | null,
+  userId?: string | null
 ): Promise<RouteResult> {
   // User override → camada 0 (determinístico)
   if (userOverride === 'quick') {
@@ -359,7 +361,7 @@ export async function runRouterAgent(
   }
 
   // Camada 2: LLM
-  const llmResult = await llmRoute(input);
+  const llmResult = await llmRoute(input, userId);
   logger.debug(`[RouterAgent] intent=${llmResult.intent} | confidence=model | words=${wordCount}`);
   return llmResult;
 }

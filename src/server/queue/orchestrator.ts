@@ -3,13 +3,14 @@ import { generateText } from 'ai';
 import { and, eq, inArray, notInArray } from 'drizzle-orm';
 import { bullmqRedis } from '@/lib/redis';
 import { getModelForTask } from '@/lib/ai-provider';
+import { getUserModel } from '@/server/llm/client';
 import { logger } from '@/lib/logger';
 import { db } from '@/server/db';
 import { articles, searchQueries } from '@/server/db/schema';
 import type { ArticleOrchestrationJob } from './jobs';
 import { publishQueryStatus } from './notifier';
 
-async function runRelevanceGate(queryId: string, skipRelevanceGate?: boolean) {
+async function runRelevanceGate(queryId: string, skipRelevanceGate?: boolean, userId?: string | null) {
   if (skipRelevanceGate) return { proceed: true, reason: 'openalex_skip' };
 
   const [qData] = await db
@@ -37,8 +38,7 @@ async function runRelevanceGate(queryId: string, skipRelevanceGate?: boolean) {
 
   try {
     const { text } = await generateText({
-      model: getModelForTask('tldr'),
-      providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
+      model: userId ? await getUserModel(userId, 'tldr') : getModelForTask('tldr'),
       abortSignal: AbortSignal.timeout(20_000),
       system:
         'Você é um avaliador de relevância de literatura científica. Responda APENAS com JSON válido, sem markdown.',
@@ -101,8 +101,8 @@ export function startOrchestratorWorker() {
   const worker = new Worker<ArticleOrchestrationJob>(
     'core.article.orchestrate',
     async (job: Job<ArticleOrchestrationJob>) => {
-      const { article_ids, query_id, skip_relevance_gate } = job.data;
-      const relevanceGate = await runRelevanceGate(query_id, skip_relevance_gate);
+      const { article_ids, query_id, user_id, skip_relevance_gate } = job.data;
+      const relevanceGate = await runRelevanceGate(query_id, skip_relevance_gate, user_id);
 
       if (!relevanceGate.proceed) return { success: false, skipped: true };
 

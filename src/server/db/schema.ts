@@ -78,6 +78,7 @@ export const userLlmSettings = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     provider: text('provider').notNull().default('google'),
+    preset: text('preset').notNull().default('balanced'),
     encryptedApiKey: text('encrypted_api_key'),
     apiKeyLast4: text('api_key_last4'),
     models: jsonb('models').$type<Record<string, string>>().notNull().default({}),
@@ -89,6 +90,39 @@ export const userLlmSettings = pgTable(
     userIdx: uniqueIndex('user_llm_settings_user_id_idx').on(table.userId),
   })
 );
+
+export const userProviderCredentials = pgTable(
+  'user_provider_credentials',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    encryptedApiKey: text('encrypted_api_key').notNull(),
+    apiKeyLast4: text('api_key_last4').notNull(),
+    validatedAt: timestamp('validated_at'),
+    validationStatus: text('validation_status').notNull().default('pending'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    userProviderIdx: uniqueIndex('user_provider_credentials_user_provider_idx').on(table.userId, table.provider),
+  })
+);
+
+export const llmUsageEvents = pgTable('llm_usage_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+  requestId: text('request_id'),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  task: text('task').notNull(),
+  credentialMode: text('credential_mode').notNull(),
+  inputTokens: integer('input_tokens').notNull().default(0),
+  cachedInputTokens: integer('cached_input_tokens').notNull().default(0),
+  outputTokens: integer('output_tokens').notNull().default(0),
+  estimatedCostMicrousd: integer('estimated_cost_microusd').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
 
 // --- Core App Tables ---
 
@@ -134,6 +168,8 @@ export const searchQueries = pgTable(
     // Fase 6 (P-seguinte): embedding semântico da query (gemini-embedding-001, 768 dims).
     // Permite detectar queries similares anteriores e alimentar RAG de cache entre sessões.
     queryEmbedding: vector('query_embedding', { dimensions: 768 }),
+    embeddingProvider: text('embedding_provider'),
+    embeddingModel: text('embedding_model'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
   (table) => ({
@@ -176,6 +212,8 @@ export const articles = pgTable(
     // I-03: P-19 — embedding do abstract para reranking semântico.
     // Migrado de TEXT para vector(768) em 0005_pgvector_and_url_idx.sql.
     abstractEmbedding: vector('abstract_embedding', { dimensions: 768 }),
+    embeddingProvider: text('embedding_provider'),
+    embeddingModel: text('embedding_model'),
     // Fase 6 (P-seguinte): Grafo de citações via Semantic Scholar API.
     // Formato: { references: [{id, title, doi}...], citations: [...], fetched_at: ISO }
     citationGraph: jsonb('citation_graph'),

@@ -113,6 +113,27 @@
       "when": 1773196800000,
       "tag": "0015_search_run_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1773283200000,
+      "tag": "0016_llm_catalog_credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1773369600000,
+      "tag": "0017_embedding_space_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1773456000000,
+      "tag": "0018_llm_usage_events",
+      "breakpoints": true
     }
   ]
 }

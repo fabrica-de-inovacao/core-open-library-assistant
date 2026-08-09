@@ -14,6 +14,7 @@
 
 import { generateText } from 'ai';
 import { getModelForTask } from '@/lib/ai-provider';
+import { getUserModel } from '@/server/llm/client';
 import type { Article } from '@/lib/reranking';
 import { logger } from '@/lib/logger';
 
@@ -30,7 +31,7 @@ export interface RankedArticle {
  * @param topic     Tópico da pesquisa em linguagem natural
  * @returns         Lista reordenada por relevância semântica (maior = mais relevante)
  */
-export async function runRerankerAgent(articles: Article[], topic: string): Promise<Article[]> {
+export async function runRerankerAgent(articles: Article[], topic: string, userId?: string | null): Promise<Article[]> {
   if (articles.length === 0) return [];
 
   // Para listas pequenas, o score composto já é suficiente
@@ -45,7 +46,7 @@ export async function runRerankerAgent(articles: Article[], topic: string): Prom
   const articleList = candidates
     .map(
       (art, idx) =>
-        `ID_${idx}: "${art.title}" | Palavras-chave: ${art.keywords ?? 'N/A'} | Abstract: ${(art.abstract ?? art.tldrContent ?? '').slice(0, 300)}`
+        `ID_${idx}: "${art.title}" | Palavras-chave: ${art.keywords ?? 'N/A'} | Abstract: ${(art.abstract ?? art.tldrContent ?? '').slice(0, 300).toWellFormed()}`
     )
     .join('\n');
 
@@ -53,7 +54,7 @@ export async function runRerankerAgent(articles: Article[], topic: string): Prom
 
   try {
     const { text } = await generateText({
-      model: getModelForTask('reranker'),
+      model: userId ? await getUserModel(userId, 'reranker') : getModelForTask('reranker'),
       system: `Você é um especialista em literatura acadêmica de Computação e Tecnologia.
 Sua tarefa: dado um tópico de pesquisa e uma lista de artigos, ordenar os artigos do MAIS relevante para o MENOS relevante.
 

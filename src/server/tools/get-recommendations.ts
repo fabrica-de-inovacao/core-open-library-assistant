@@ -10,6 +10,7 @@ import { articles, searchQueries } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { logger } from '@/lib/logger';
 import { getModelForTask } from '@/lib/ai-provider';
+import { getUserModel } from '@/server/llm/client';
 import type { ToolContext } from './propose-search';
 import { enqueueArticleBatch } from '@/server/queue/client';
 
@@ -111,7 +112,7 @@ export function buildGetRecommendationsTool(ctx: ToolContext) {
           if (tldrText) {
             try {
               const { text } = await generateText({
-                model: getModelForTask('tldr'),
+                model: ctx.sessionUserId ? await getUserModel(ctx.sessionUserId, 'tldr') : getModelForTask('tldr'),
                 system: 'Você é um tradutor especializado em textos acadêmicos.',
                 prompt: `Traduza o seguinte TL;DR científico para o Português do Brasil de forma clara e concisa. Retorne APENAS o texto traduzido, sem aspas ou introduções:\n\n${tldrText}`,
               });

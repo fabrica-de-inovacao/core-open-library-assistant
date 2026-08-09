@@ -20,6 +20,7 @@
 
 import { generateText } from 'ai';
 import { getModelForTask } from '@/lib/ai-provider';
+import { getUserModel } from '@/server/llm/client';
 import type { Article } from '@/lib/reranking';
 import { formatArticleReference } from '@/lib/mappers/article';
 import { logger } from '@/lib/logger';
@@ -48,7 +49,8 @@ export async function runSynthesisAgent(
   articles: Article[],
   queryId: string,
   depth: SynthesisDepth = 'full',
-  userName?: string
+  userName?: string,
+  userId?: string | null
 ): Promise<SynthesisResult> {
   // Fase C (IA-04): caps ajustados por profundidade de síntese.
   // brief: 8→5 (eram ignorados pela LLM — 2-3 parágrafos não absorvem 8 artigos)
@@ -68,7 +70,7 @@ export async function runSynthesisAgent(
   const articlesContext = topK
     .map((art, idx) => {
       const body = art.markdownContent
-        ? art.markdownContent.slice(0, 4000) +
+        ? art.markdownContent.slice(0, 4000).toWellFormed() +
           (art.markdownContent.length > 4000 ? '\n...[TRUNCADO]' : '')
         : `ABSTRACT/TL;DR: ${art.tldrContent ?? 'Não disponível'}`;
       return [
@@ -87,15 +89,8 @@ export async function runSynthesisAgent(
   const systemPrompt = buildSystemPrompt(depth, topK.length, userName);
 
   const { text } = await generateText({
-    model: getModelForTask('synthesis'),
+    model: userId ? await getUserModel(userId, 'synthesis') : getModelForTask('synthesis'),
     // Cap de thinking budget para garantir resposta dentro do maxDuration (120s).
-    providerOptions: {
-      google: {
-        thinkingConfig: {
-          thinkingBudget: depth === 'full' ? 8192 : depth === 'standard' ? 4096 : 2048,
-        },
-      },
-    },
     system: systemPrompt,
     prompt: `## MAPA DE CITAÇÕES — NÚMEROS FIXOS E IMUTÁVEIS:
 ${citationMap}

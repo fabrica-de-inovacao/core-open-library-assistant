@@ -251,6 +251,7 @@ function TabLLMs() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [provider, setProvider] = useState('google');
+  const [preset, setPreset] = useState('balanced');
   const [models, setModels] = useState<Record<string, string>>({});
   const [apiKey, setApiKey] = useState('');
   const [useOwnKey, setUseOwnKey] = useState(false);
@@ -268,6 +269,7 @@ function TabLLMs() {
       setProviders(data.providers ?? {});
       if (data.settings) {
         setProvider(data.settings.provider ?? 'google');
+        setPreset(data.settings.preset ?? 'balanced');
         setModels(data.settings.models ?? {});
         setUseOwnKey(Boolean(data.settings.useOwnKey));
         setApiKeyLast4(data.settings.apiKeyLast4 ?? null);
@@ -287,7 +289,7 @@ function TabLLMs() {
     const res = await fetch('/api/settings/llm', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, models, useOwnKey, apiKey: apiKey || undefined }),
+      body: JSON.stringify({ provider, preset, models, useOwnKey, apiKey: apiKey || undefined }),
     });
     setSaving(false);
     setTestResult(res.ok ? 'Configuração salva.' : 'Falha ao salvar configuração.');
@@ -320,6 +322,16 @@ function TabLLMs() {
                   {p.label}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+        </SettingRow>
+        <SettingRow label="Perfil" description="Aplica uma combinação de modelos do mesmo provedor.">
+          <Select value={preset} onValueChange={(value) => { setPreset(value); setModels({}); }}>
+            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="economy">Econômico</SelectItem>
+              <SelectItem value="balanced">Equilibrado</SelectItem>
+              <SelectItem value="quality">Qualidade</SelectItem>
             </SelectContent>
           </Select>
         </SettingRow>

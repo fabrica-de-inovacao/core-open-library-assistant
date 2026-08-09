@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { connection } from 'next/server';
 import { z } from 'zod';
 import * as cheerio from 'cheerio';
-import { eq, inArray, and, sql } from 'drizzle-orm';
+import { eq, inArray, and, or, sql } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
 import { auth } from '@/auth';
@@ -315,8 +315,9 @@ export async function GET(request: Request) {
     const newArticleIds: string[] = [];
 
     if (limitedResults.length > 0) {
-      // --- DOI dedup: find articles already processed with these DOIs or URLs ---
+      // --- DOI/URL dedup: find articles already processed with these DOIs or URLs ---
       const knownDois = limitedResults.map((r) => r.doi).filter(Boolean) as string[];
+      const knownUrls = limitedResults.map((r) => r.originalUrl).filter(Boolean) as string[];
 
       type ExistingArticle = {
         id: string;
@@ -339,11 +340,15 @@ export async function GET(request: Request) {
 
       // Fetch any already-processed articles matching these DOIs or URLs
       let alreadyProcessed: ExistingArticle[] = [];
-      if (knownDois.length > 0) {
+      const matchConditions = [];
+      if (knownDois.length > 0) matchConditions.push(inArray(articles.doi, knownDois));
+      if (knownUrls.length > 0) matchConditions.push(inArray(articles.originalUrl, knownUrls));
+
+      if (matchConditions.length > 0) {
         alreadyProcessed = (await db
           .select()
           .from(articles)
-          .where(inArray(articles.doi, knownDois))) as ExistingArticle[];
+          .where(or(...matchConditions))) as ExistingArticle[];
         // Keep only truly finished ones
         alreadyProcessed = alreadyProcessed.filter(
           (a) => a.status === 'done' || a.status === 'abstract_only'
@@ -429,7 +434,14 @@ export async function GET(request: Request) {
               status: 'pending' as const,
             }))
           )
-          .onConflictDoNothing();
+          .onConflictDoUpdate({
+            target: [articles.queryId, articles.originalUrl],
+            set: {
+              status: 'pending',
+              tldrContent: null,
+              updatedAt: sql`now()`,
+            },
+          });
         logger.info(`[Search] ✅ ${toInsertFresh.length} artigos novos inseridos (pending)`);
 
         // Fetch only the pending IDs (fresh ones) to dispatch to Queue worker

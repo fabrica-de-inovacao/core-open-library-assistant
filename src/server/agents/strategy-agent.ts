@@ -18,6 +18,7 @@
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
 import { getModelForTask, getModelIdForTask } from '@/lib/ai-provider';
+import { getUserModel } from '@/server/llm/client';
 import { profileQuery } from '@/server/agents/query-profiler';
 import { retrieveUseCaseExamples } from '@/server/agents/use-case-rag';
 import { logger } from '@/lib/logger';
@@ -44,7 +45,8 @@ export async function runStrategyAgent(
   topic: string,
   rawQueries: string[] = [],
   previousFailedQueries: string[] = [],
-  maxQueriesOverride?: number
+  maxQueriesOverride?: number,
+  userId?: string | null
 ): Promise<StrategyResult> {
   logger.debug(
     `[StrategyAgent] 🗺️  Planejando estratégia | topic="${topic.slice(0, 60)}" | model=${getModelIdForTask('strategy')}`
@@ -72,7 +74,7 @@ export async function runStrategyAgent(
       : '';
 
   const { output, finishReason } = await generateText({
-    model: getModelForTask('strategy'),
+    model: userId ? await getUserModel(userId, 'strategy') : getModelForTask('strategy'),
     output: Output.object({ schema: strategySchema }),
     system: `Você é um especialista em estratégias de busca bibliográfica sistemática (PRISMA/Cochrane).
 Sua tarefa: dado um tópico de pesquisa, gerar EXATAMENTE ${maxQueries} string(s) de busca otimizada(s) para a SBC OpenLib (SOL).

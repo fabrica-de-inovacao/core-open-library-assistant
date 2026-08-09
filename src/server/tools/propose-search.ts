@@ -12,6 +12,8 @@ import { searchQueries } from '@/server/db/schema';
 import { runStrategyAgent } from '@/server/agents/strategy-agent';
 import type { SynthesisDepth } from '@/server/agents/synthesis-agent';
 import { getEmbeddingModel } from '@/lib/ai-provider';
+import { getUserEmbeddingModel } from '@/server/llm/client';
+import { resolveUserEmbeddingConfig } from '@/server/llm/credentials';
 import { logger } from '@/lib/logger';
 
 /** Artigo retornado pelo RPC match_articles do Supabase (RAG de Cache) */
@@ -129,7 +131,8 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
               topic,
               rawQueries,
               previousFailedQueries,
-              maxQueriesOverride
+              maxQueriesOverride,
+              ctx.sessionUserId
             );
             finalQueries = strategy.queries;
             logger.info(
@@ -155,11 +158,12 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
         // 3. Se ≥ 3 artigos relevantes → retorna cache_hit=true ao Orchestrator.
         // Falha no embedding é não-fatal — busca SOL normal prossegue normalmente.
         let queryEmbeddingVec: number[] | undefined;
+        const embeddingConfig = await resolveUserEmbeddingConfig(ctx.sessionUserId);
         let cachedArticles: CachedArticleMatch[] = [];
         if (storedOriginalQuery) {
           try {
             const { embedding } = await embed({
-              model: getEmbeddingModel(),
+              model: ctx.sessionUserId ? await getUserEmbeddingModel(ctx.sessionUserId) : getEmbeddingModel(),
               value: storedOriginalQuery.slice(0, 2000),
               providerOptions: {
                 openai: { dimensions: 768 },
@@ -188,6 +192,8 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
               INNER JOIN search_queries sq ON sq.id = a.query_id
               WHERE
                 a.abstract_embedding IS NOT NULL
+                AND a.embedding_provider = ${embeddingConfig.provider}
+                AND a.embedding_model = ${embeddingConfig.models?.embedding}
                 AND a.status IN ('done', 'abstract_only')
                 AND (${ctx.sessionUserId}::text IS NULL OR sq.user_id = ${ctx.sessionUserId})
                 AND 1 - (a.abstract_embedding <=> ${embeddingLiteral}::vector) > 0.75
@@ -227,6 +233,8 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
               FROM search_queries
               WHERE user_id = ${ctx.sessionUserId}
                 AND query_embedding IS NOT NULL
+                AND embedding_provider = ${embeddingConfig.provider}
+                AND embedding_model = ${embeddingConfig.models?.embedding}
               ORDER BY query_embedding <=> ${embeddingLiteral}::vector
               LIMIT 1
             `);
@@ -263,6 +271,10 @@ export function buildProposeSearchSolDatabaseTool(ctx: ToolContext) {
             chatId: ctx.chatId,
             ...(await getAttemptMetadata(ctx.chatId, 'sol')),
             ...(queryEmbeddingVec ? { queryEmbedding: queryEmbeddingVec } : {}),
+            ...(queryEmbeddingVec ? {
+              embeddingProvider: embeddingConfig.provider,
+              embeddingModel: embeddingConfig.models?.embedding,
+            } : {}),
           })
           .returning();
 

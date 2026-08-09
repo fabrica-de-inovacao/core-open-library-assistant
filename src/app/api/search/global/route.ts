@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { connection } from 'next/server';
-import { eq, inArray, and, sql } from 'drizzle-orm';
+import { eq, inArray, and, or, sql } from 'drizzle-orm';
 import { db } from '@/server/db';
 import { searchQueries, articles } from '@/server/db/schema';
 import { auth } from '@/auth';
@@ -433,12 +433,18 @@ export async function GET(request: Request) {
         metadataSource: string | null;
       };
 
+      const knownUrls = allResults.map((r) => r.originalUrl).filter(Boolean) as string[];
+
       let alreadyProcessed: ExistingArticle[] = [];
-      if (knownDois.length > 0) {
+      const matchConditions = [];
+      if (knownDois.length > 0) matchConditions.push(inArray(articles.doi, knownDois));
+      if (knownUrls.length > 0) matchConditions.push(inArray(articles.originalUrl, knownUrls));
+
+      if (matchConditions.length > 0) {
         alreadyProcessed = (await db
           .select()
           .from(articles)
-          .where(inArray(articles.doi, knownDois))) as ExistingArticle[];
+          .where(or(...matchConditions))) as ExistingArticle[];
         alreadyProcessed = alreadyProcessed.filter(
           (a) => a.status === 'done' || a.status === 'abstract_only'
         );
@@ -511,7 +517,7 @@ export async function GET(request: Request) {
           .insert(articles)
           .values(
             toInsertFresh.map((art) => ({
-              queryId: queryId as string,
+              queryId: queryId,
               doi: art.doi ?? undefined,
               title: art.title,
               authors: art.authors,
@@ -524,7 +530,14 @@ export async function GET(request: Request) {
               metadataSource: 'openalex' as const,
             }))
           )
-          .onConflictDoNothing();
+          .onConflictDoUpdate({
+            target: [articles.queryId, articles.originalUrl],
+            set: {
+              status: 'pending',
+              tldrContent: null,
+              updatedAt: sql`now()`,
+            },
+          });
         logger.info(
           `[GlobalSearch] ✅ ${toInsertFresh.length} artigos novos inseridos como pending`
         );

@@ -81,7 +81,14 @@ export async function getChatMessages(chatId: string): Promise<UIMessage[]> {
           );
           const newPart = invocationToToolPart(ti, 'output-available');
           if (matchIdx >= 0) {
-            prevAssistant.parts[matchIdx] = newPart;
+            const existingInput = (prevAssistant.parts[matchIdx] as any).input;
+            prevAssistant.parts[matchIdx] = {
+              ...newPart,
+              input:
+                newPart.input && Object.keys(newPart.input).length > 0
+                  ? newPart.input
+                  : (existingInput ?? newPart.input),
+            };
           } else {
             prevAssistant.parts.push(newPart);
           }

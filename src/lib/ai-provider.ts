@@ -29,7 +29,7 @@ function envConfig(): LlmRuntimeConfig {
       reranker: process.env.LLM_MODEL_RERANKER || process.env.LLM_MODEL || defaultModel(provider, 'reranker'),
       tldr: process.env.LLM_MODEL_TLDR || process.env.LLM_MODEL || defaultModel(provider, 'tldr'),
       strategy: process.env.LLM_MODEL_STRATEGY || process.env.LLM_MODEL || defaultModel(provider, 'strategy'),
-      embedding: process.env.EMBEDDING_MODEL || defaultModel(provider === 'groq' ? 'google' : provider, 'embedding'),
+      embedding: process.env.EMBEDDING_MODEL || defaultModel(provider === 'groq' ? 'openai' : provider, 'embedding'),
     },
   };
 }
@@ -47,7 +47,15 @@ export function getModelIdForTask(task: AgentTask): string {
 }
 
 export function getEmbeddingModel(): EmbeddingModel {
-  return createEmbedding(envConfig());
+  const config = envConfig();
+  if (config.provider === 'groq') {
+    return createEmbedding({
+      provider: 'openai',
+      apiKey: process.env.OPENAI_API_KEY,
+      models: { embedding: 'text-embedding-3-small' },
+    });
+  }
+  return createEmbedding(config);
 }
 
 export function getEmbeddingModelId(): string {

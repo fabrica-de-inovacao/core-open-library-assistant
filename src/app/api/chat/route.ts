@@ -8,6 +8,7 @@ import { articles, searchQueries, chatSessions } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { saveChatMessages } from '@/server/actions/chat';
 import { logger } from '@/lib/logger';
+import { safeSlice } from '@/lib/utils';
 import { runRouterAgent, type RouteIntent } from '@/server/agents/router-agent';
 import type { SynthesisDepth } from '@/server/agents/synthesis-agent';
 import {
@@ -41,14 +42,14 @@ function describeToolCalls(messages: any[]): string {
       if (toolName === 'propose_search_sol_database') {
         // input.queries é array — exibe a primeira string como preview do tópico
         const queriesArr: string[] = Array.isArray(input.queries) ? input.queries : [];
-        const preview = (queriesArr[0] ?? String(input.topic ?? '')).slice(0, 80);
-        const qId = (output.query_id ?? '').slice(0, 8);
+        const preview = safeSlice(queriesArr[0] ?? String(input.topic ?? ''), 0, 80);
+        const qId = safeSlice(output.query_id ?? '', 0, 8);
         lines.push(
           `- Busca SOL: "${preview}"${queriesArr.length > 1 ? ` (+${queriesArr.length - 1})` : ''}${qId ? ` [qid:${qId}…]` : ''}`
         );
       } else if (toolName === 'propose_search_global_database') {
-        const q = String(input.query ?? '').slice(0, 80);
-        const qId = (output.query_id ?? '').slice(0, 8);
+        const q = safeSlice(String(input.query ?? ''), 0, 80);
+        const qId = safeSlice(output.query_id ?? '', 0, 8);
         lines.push(`- Busca Global (OpenAlex): "${q}"${qId ? ` [qid:${qId}…]` : ''}`);
       } else if (toolName === 'generate_systematic_review') {
         lines.push(`- Revisão bibliográfica gerada e entregue ao usuário.`);
@@ -365,7 +366,7 @@ Exceção: saudações puras ("oi", "olá", "tudo bem?") sem conteúdo temático
           (a, i) =>
             `[${i + 1}] "${a.title}" — ${a.authors ?? 'Autores N/A'} (${a.publicationYear ?? 'Ano N/A'})` +
             (a.doi ? ` DOI: ${a.doi}` : '') +
-            (a.tldrContent ? `\n    TL;DR: ${a.tldrContent.slice(0, 200)}` : '')
+            (a.tldrContent ? `\n    TL;DR: ${safeSlice(a.tldrContent, 0, 200)}` : '')
         )
         .join('\n');
 
@@ -496,7 +497,8 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
     try {
       const routeResult = await runRouterAgent(
         lastUserTextStr,
-        (userSynthesisMode as 'quick' | 'systematic' | null) ?? null
+        (userSynthesisMode as 'quick' | 'systematic' | null) ?? null,
+        sessionUserId
       );
       routeIntent = routeResult.intent;
       synthesisDepth = routeResult.synthesisDepth;

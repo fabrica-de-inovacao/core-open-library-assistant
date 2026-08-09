@@ -10,6 +10,7 @@ import { articles, searchQueries } from '@/server/db/schema';
 import { eq, inArray, desc } from 'drizzle-orm';
 import { rankArticles } from '@/lib/reranking';
 import { getEmbeddingModel } from '@/lib/ai-provider';
+import { getUserEmbeddingModel } from '@/server/llm/client';
 import { runRerankerAgent } from '@/server/agents/reranker-agent';
 import { runSynthesisAgent, type SynthesisDepth } from '@/server/agents/synthesis-agent';
 import { formatArticleReference } from '@/lib/mappers/article';
@@ -114,7 +115,7 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
       if (topic) {
         try {
           const { embedding } = await embed({
-            model: getEmbeddingModel(),
+            model: ctx.sessionUserId ? await getUserEmbeddingModel(ctx.sessionUserId) : getEmbeddingModel(),
             value: topic.slice(0, 2000),
             providerOptions: {
               openai: { dimensions: 768 },
@@ -139,7 +140,7 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
       // ✅ I-04: reranker agent (semântico via LLM)
       let finalRanked = initialRanked;
       try {
-        finalRanked = await runRerankerAgent(initialRanked, topic);
+        finalRanked = await runRerankerAgent(initialRanked, topic, ctx.sessionUserId);
       } catch (err) {
         logger.warn('[Tool] RerankerAgent falhou, usando ranking composto:', err);
       }
@@ -150,7 +151,8 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
           finalRanked,
           ctx.chatId ?? ctx.queryId ?? 'unknown',
           effectiveDepth,
-          ctx.userName ?? undefined
+          ctx.userName ?? undefined,
+          ctx.sessionUserId
         );
         return {
           success: true,
@@ -171,7 +173,7 @@ export function buildGenerateSystematicReviewTool(ctx: ReviewToolContext) {
         const articlesContent = topK
           .map((art, idx) => {
             const body = art.markdownContent
-              ? art.markdownContent.slice(0, 4000) +
+              ? art.markdownContent.slice(0, 4000).toWellFormed() +
                 (art.markdownContent.length > 4000 ? '\n...[TRUNCATED]' : '')
               : `ABSTRACT/TL;DR: ${art.tldrContent}`;
             return `\n=== ARTIGO [${idx + 1}] — "${art.title}" ===\n${body}`;

@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/server/db';
-import { userLlmSettings } from '@/server/db/schema';
+import { userLlmSettings, userProviderCredentials } from '@/server/db/schema';
 import { decryptSecret } from './crypto';
-import { isLlmProvider, PROVIDERS, type LlmProvider } from '@/lib/llm/registry';
+import { isLlmPreset, isLlmProvider, presetModels, PROVIDERS, validateModels, type LlmProvider } from '@/lib/llm/registry';
 import type { LlmRuntimeConfig } from '@/lib/llm/adapters';
 
 export async function resolveLlmConfig(userId: string | null): Promise<LlmRuntimeConfig> {
@@ -20,10 +20,17 @@ export async function resolveLlmConfig(userId: string | null): Promise<LlmRuntim
 
     if (settings && isLlmProvider(settings.provider)) {
       provider = settings.provider;
-      models = settings.models ?? {};
+      const preset = isLlmPreset(settings.preset) ? settings.preset : 'balanced';
+      const overrides = settings.models ?? {};
+      models = { ...presetModels(provider, preset), ...(validateModels(provider, overrides) ? overrides : {}) };
       apiKey = process.env[PROVIDERS[provider].envKey];
-      if (settings.useOwnKey && settings.encryptedApiKey) {
-        apiKey = decryptSecret(settings.encryptedApiKey);
+      if (settings.useOwnKey) {
+        const [credential] = await db
+          .select()
+          .from(userProviderCredentials)
+          .where(eq(userProviderCredentials.userId, userId))
+          .limit(1);
+        if (credential?.provider === provider) apiKey = decryptSecret(credential.encryptedApiKey);
       }
     }
   }
@@ -48,5 +55,26 @@ export function resolveEmbeddingConfig(): LlmRuntimeConfig {
     models: {
       embedding: process.env.EMBEDDING_MODEL,
     },
+  };
+}
+
+export async function resolveUserEmbeddingConfig(userId: string | null): Promise<LlmRuntimeConfig> {
+  const generation = await resolveLlmConfig(userId);
+  const provider: LlmProvider = generation.provider === 'groq' ? 'openai' : generation.provider;
+  let apiKey = process.env[PROVIDERS[provider].envKey];
+
+  if (userId) {
+    const [settings] = await db.select().from(userLlmSettings).where(eq(userLlmSettings.userId, userId)).limit(1);
+    if (settings?.useOwnKey) {
+      const credentials = await db.select().from(userProviderCredentials).where(eq(userProviderCredentials.userId, userId));
+      const credential = credentials.find((item) => item.provider === provider);
+      if (credential) apiKey = decryptSecret(credential.encryptedApiKey);
+    }
+  }
+
+  return {
+    provider,
+    apiKey,
+    models: { embedding: provider === 'openai' ? 'text-embedding-3-small' : 'gemini-embedding-001' },
   };
 }
