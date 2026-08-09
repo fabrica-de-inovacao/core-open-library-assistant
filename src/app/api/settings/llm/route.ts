@@ -34,8 +34,8 @@ export async function GET() {
           preset: settings.preset,
           models: settings.models,
           useOwnKey: settings.useOwnKey,
-          hasApiKey: false,
-          apiKeyLast4: null,
+          hasApiKey: Boolean(settings.encryptedApiKey),
+          apiKeyLast4: settings.apiKeyLast4 ?? null,
         }
       : null,
   });

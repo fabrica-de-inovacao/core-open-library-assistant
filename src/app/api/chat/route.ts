@@ -1,8 +1,10 @@
 ﻿/* eslint-disable @typescript-eslint/no-explicit-any */
 import { streamText, stepCountIs, convertToModelMessages, generateText } from 'ai';
+import { randomUUID } from 'crypto';
 import { auth } from '@/auth';
 import { getModelIdForTask } from '@/lib/ai-provider';
 import { getUserModel } from '@/server/llm/client';
+import { recordUsage } from '@/server/llm/record-usage';
 import { db } from '@/server/db';
 import { articles, searchQueries, chatSessions } from '@/server/db/schema';
 import { eq } from 'drizzle-orm';
@@ -612,6 +614,17 @@ O sistema já ajustou automaticamente a estratégia de busca para evitar repeti�
       logger.info('[Chat] response.msgs  :', e.response?.messages?.length ?? 0);
       logger.info('[Chat] finishReason   :', e.finishReason);
       logger.debug('[Chat] usage total    :', e.usage);
+
+      // Grava métricas de uso (não bloqueia — fail-silently)
+      if (e.usage && sessionUserId) {
+        void recordUsage({
+          userId: sessionUserId,
+          requestId: `${chatId}:${randomUUID().slice(0, 8)}`,
+          model: modelId,
+          task: 'orchestrator',
+          usage: e.usage,
+        });
+      }
       // Log por step para diagnóstico
       if (logger.isDebug && e.steps?.length > 0) {
         e.steps.forEach((s: any, i: number) => {

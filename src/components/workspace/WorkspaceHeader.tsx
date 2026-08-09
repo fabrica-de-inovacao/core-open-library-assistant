@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { UsageStatsPopover } from './UsageStatsPopover';
 interface WorkspaceHeaderProps {
   hasActiveSession: boolean;
   // Chat mode
@@ -116,6 +117,9 @@ export function WorkspaceHeader({
                 </span>
               </div>
             )}
+
+            {/* Estatísticas para nerds */}
+            <UsageStatsPopover chatId={chatId} />
 
             <Popover>
               <PopoverTrigger asChild>

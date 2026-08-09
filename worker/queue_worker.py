@@ -21,6 +21,49 @@ WORKER_BASE_URL = os.environ.get("PYTHON_WORKER_URL", "http://127.0.0.1:8000")
 SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
+APP_BASE_URL = os.environ.get("NEXT_PUBLIC_APP_URL", os.environ.get("NEXTAUTH_URL", "http://127.0.0.1:3000"))
+
+
+async def _post_usage(
+    http: httpx.AsyncClient,
+    *,
+    user_id: str | None,
+    article_id: str | None,
+    provider: str,
+    model: str,
+    task: str,
+    response_json: dict | None,
+) -> None:
+    """Extrai usage do response JSON do LLM e registra no backend. Fail-silently."""
+    if not response_json:
+        return
+    payload: dict[str, Any] = {
+        "user_id": user_id,
+        "article_id": article_id,
+        "provider": provider,
+        "model": model,
+        "task": task,
+    }
+    # Google: usageMetadata { promptTokenCount, candidatesTokenCount, cachedContentTokenCount }
+    um = response_json.get("usageMetadata")
+    if isinstance(um, dict):
+        payload["input_tokens"] = um.get("promptTokenCount", 0)
+        payload["output_tokens"] = um.get("candidatesTokenCount", 0)
+        payload["cached_tokens"] = um.get("cachedContentTokenCount", 0)
+    # OpenAI/Groq: usage { prompt_tokens, completion_tokens }
+    ou = response_json.get("usage")
+    if isinstance(ou, dict):
+        payload["input_tokens"] = ou.get("prompt_tokens", 0)
+        payload["output_tokens"] = ou.get("completion_tokens", 0)
+    try:
+        await http.post(
+            f"{APP_BASE_URL}/api/internal/usage",
+            headers={"Content-Type": "application/json", "X-Worker-Token": WORKER_API_KEY},
+            json=payload,
+            timeout=10,
+        )
+    except Exception as exc:
+        print(f"[queue_worker] _post_usage falhou: {exc}")
 
 
 def safe_slice(s: str | None, max_len: int) -> str:
@@ -268,6 +311,8 @@ async def _llm_generate_tldr(
     prompt: str,
     system: str,
     timeout: int = 45,
+    user_id: str | None = None,
+    article_id: str | None = None,
 ) -> str | None:
     if not api_key:
         print(f"[queue_worker] API Key ausente para provider {provider}")
@@ -288,6 +333,15 @@ async def _llm_generate_tldr(
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                await _post_usage(
+                    http,
+                    user_id=user_id,
+                    article_id=article_id,
+                    provider=provider,
+                    model=model,
+                    task="tldr",
+                    response_json=data,
+                )
                 candidates = data.get("candidates") or []
                 if not candidates:
                     return None
@@ -322,6 +376,15 @@ async def _llm_generate_tldr(
                 resp = await http.post(endpoint, headers=headers, json=payload, timeout=timeout)
                 resp.raise_for_status()
                 data = resp.json()
+                await _post_usage(
+                    http,
+                    user_id=user_id,
+                    article_id=article_id,
+                    provider=provider,
+                    model=model,
+                    task="tldr",
+                    response_json=data,
+                )
                 choices = data.get("choices") or []
                 if choices and len(choices) > 0:
                     return choices[0].get("message", {}).get("content")
@@ -348,7 +411,14 @@ async def _llm_generate_tldr(
     return None
 
 
-async def _embed_text(http: httpx.AsyncClient, text: str, user_api_key: str | None = None, provider: str | None = None) -> list[float] | None:
+async def _embed_text(
+    http: httpx.AsyncClient,
+    text: str,
+    user_api_key: str | None = None,
+    provider: str | None = None,
+    user_id: str | None = None,
+    article_id: str | None = None,
+) -> list[float] | None:
     if not text:
         return None
 
@@ -373,6 +443,15 @@ async def _embed_text(http: httpx.AsyncClient, text: str, user_api_key: str | No
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                await _post_usage(
+                    http,
+                    user_id=user_id,
+                    article_id=article_id,
+                    provider="openai",
+                    model=model,
+                    task="embedding",
+                    response_json=data,
+                )
                 return (data.get("data") or [{}])[0].get("embedding")
             else:
                 api_key = user_api_key or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
@@ -390,7 +469,17 @@ async def _embed_text(http: httpx.AsyncClient, text: str, user_api_key: str | No
                     timeout=30,
                 )
                 resp.raise_for_status()
-                return (resp.json().get("embedding") or {}).get("values")
+                data = resp.json()
+                await _post_usage(
+                    http,
+                    user_id=user_id,
+                    article_id=article_id,
+                    provider="google",
+                    model=model,
+                    task="embedding",
+                    response_json=data,
+                )
+                return (data.get("embedding") or {}).get("values")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429 and attempt < 3:
                 await asyncio.sleep(2 ** attempt)
@@ -529,10 +618,19 @@ async def process_single_article(ctx, *, article_id: str, query_id: str, user_id
                 model,
                 f"{context}\n\nGere a síntese:\n\n{safe_slice(markdown, 30000)}",
                 f"Você é um assistente acadêmico. Crie uma síntese estruturada neste formato: 🔍 Problema: ...\n🛠 Método: ...\n✅ Resultado: ... Máximo 600 caracteres. Obrigatoriamente em {lang}.",
+                user_id=user_id,
+                article_id=article_id,
             )
 
         embed_source = tldr or (enriched["abstract"] if enriched else None)
-        embedding = await _embed_text(http, embed_source or "", user_api_key=api_key, provider=provider)
+        embedding = await _embed_text(
+            http,
+            embed_source or "",
+            user_api_key=api_key,
+            provider=provider,
+            user_id=user_id,
+            article_id=article_id,
+        )
         if embedding:
             await db.execute(
                 "UPDATE articles SET abstract_embedding=$2::vector, embedding_provider=$3, embedding_model=$4 WHERE id=$1",
