@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Suspense } from 'react';
+import NextTopLoader from 'nextjs-toploader';
 import { AppSidebar } from '@/components/app-sidebar';
 import { SidebarProvider } from '@/components/ui/sidebar';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -28,12 +29,18 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             <Suspense fallback={<div style={{ width: '13rem' }} />}>
               <AppSidebar />
             </Suspense>
-            {/* Suspense isola sub-rotas dinâmicas (connection()) do shell estático PPR */}
-            <Suspense fallback={null}>
-              <main className="bg-background flex h-full w-full flex-col overflow-hidden">
-                {children}
-              </main>
-            </Suspense>
+            {/* Suspense removido: o layout anterior (fallback={null}) mantinha a página
+                antiga montada durante a transição, causando stale UI ao trocar de rota.
+                As páginas já têm seus próprios Suspense boundaries. */}
+            <NextTopLoader
+              color="var(--primary)"
+              height={2}
+              showSpinner={false}
+              shadow={false}
+            />
+            <main className="bg-background flex h-full w-full flex-col overflow-hidden">
+              {children}
+            </main>
           </SidebarProvider>
         </ActiveChatProvider>
       </TooltipProvider>
