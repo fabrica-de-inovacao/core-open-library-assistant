@@ -155,6 +155,11 @@ export function useChatOrchestration({
     id: chatId,
     messages: initialMessages,
     transport: chatTransport,
+    // throttle: limita re-renders a ~20fps durante streaming.
+    // Sem isso, cada text-delta do smoothStream (ou do LLM) dispara um re-render do
+    // ChatMessageItem inteiro — travando o frontend em sínteses longas (10k+ chars).
+    // 50ms = máximo 20 atualizações/segundo, suave mas não degenerativo.
+    experimental_throttle: 50,
   });
 
   const isLoading = status === 'submitted' || status === 'streaming';

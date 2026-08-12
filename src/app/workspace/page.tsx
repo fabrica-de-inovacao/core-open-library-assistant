@@ -19,6 +19,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { type UIMessage } from 'ai';
 import { useSession } from 'next-auth/react';
 import { useParams, useRouter } from 'next/navigation';
+import { Skeleton } from '@/components/ui/skeleton';
 import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader';
 import { HomeView } from '@/components/workspace/home/HomeView';
 import { ChatView } from '@/components/workspace/chat/ChatView';
@@ -35,9 +36,45 @@ import type { RecentChat } from '@/server/actions/chat';
 // ---------------------------------------------------------------------------
 // Wrapper público exportado pela rota Next.js
 // ---------------------------------------------------------------------------
+function WorkspaceLoadingFallback() {
+  return (
+    <div className="flex h-full w-full flex-col overflow-hidden">
+      {/* Header skeleton */}
+      <div className="border-border/60 flex h-14 shrink-0 items-center justify-between border-b px-4">
+        <div className="flex items-center gap-2.5">
+          <Skeleton className="size-7 rounded-md" />
+          <Skeleton className="h-4 w-32 rounded" />
+        </div>
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-7 w-20 rounded-full" />
+          <Skeleton className="size-7 rounded-md" />
+        </div>
+      </div>
+
+      {/* Content skeleton */}
+      <div className="flex-1 space-y-4 px-8 py-6">
+        <div className="space-y-3">
+          <Skeleton className="h-5 w-48 rounded" />
+          <Skeleton className="h-4 w-64 rounded" />
+        </div>
+        <div className="space-y-2.5 pt-4">
+          <Skeleton className="h-16 w-full rounded-lg" />
+          <Skeleton className="h-16 w-full rounded-lg" />
+          <Skeleton className="h-16 w-full rounded-lg" />
+          <Skeleton className="h-16 w-full rounded-lg" />
+        </div>
+        <div className="space-y-2.5 pt-4">
+          <Skeleton className="h-4 w-36 rounded" />
+          <Skeleton className="h-24 w-full rounded-lg" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function WorkspaceRoutePage() {
   return (
-    <Suspense fallback={<div>Loading workspace…</div>}>
+    <Suspense fallback={<WorkspaceLoadingFallback />}>
       <WorkspaceShellKeyed />
     </Suspense>
   );
@@ -45,7 +82,7 @@ export default function WorkspaceRoutePage() {
 
 export function WorkspacePage({ initialMessages }: { initialMessages?: UIMessage[] }) {
   return (
-    <Suspense fallback={<div>Loading workspace…</div>}>
+    <Suspense fallback={<WorkspaceLoadingFallback />}>
       <WorkspaceShellKeyed initialMessages={initialMessages} />
     </Suspense>
   );
