@@ -1,0 +1,6 @@
+FROM postgres:16
+
+COPY scripts/migrate-db.sh /migrate-db.sh
+RUN chmod +x /migrate-db.sh
+
+CMD ["/migrate-db.sh"]
