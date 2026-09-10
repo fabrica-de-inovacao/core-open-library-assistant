@@ -1,0 +1,6 @@
+FROM postgres:16
+
+COPY scripts/verify-db.sh /verify-db.sh
+RUN chmod +x /verify-db.sh
+
+CMD ["/verify-db.sh"]
